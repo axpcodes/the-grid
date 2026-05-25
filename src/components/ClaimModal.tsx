@@ -146,10 +146,13 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <PaymentElement />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        humans only please 🤖
+      </div>
+      <PaymentElement options={{ layout: { type: 'tabs', defaultCollapsed: false } }} />
       {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '10px 12px', fontSize: '13px', color: '#dc2626' }}>
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
           {error}
         </div>
       )}
@@ -221,13 +224,22 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   return (
     <div onClick={handleBackdrop} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 100, padding: '16px',
-    }}>
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+      zIndex: 100, padding: '0',
+    }}
+      // On wider screens center it like a card; on mobile it slides up from bottom
+    >
       <div style={{
-        background: '#fff', borderRadius: '16px', padding: '24px',
-        width: '100%', maxWidth: '400px', maxHeight: '92vh', overflowY: 'auto',
-        boxShadow: '0 25px 60px rgba(0,0,0,0.35)',
+        background: '#fff',
+        borderRadius: 'clamp(0px, calc(100vw - 420px), 16px) clamp(0px, calc(100vw - 420px), 16px) 0 0',
+        padding: '24px',
+        width: '100%', maxWidth: '420px',
+        maxHeight: '92dvh', overflowY: 'auto',
+        boxShadow: '0 -4px 40px rgba(0,0,0,0.2)',
+        // On desktop, detach from bottom
+        marginBottom: 'clamp(0px, calc((100vw - 420px) / 2), 5vh)',
+        borderBottomLeftRadius: 'clamp(0px, calc(100vw - 420px), 16px)',
+        borderBottomRightRadius: 'clamp(0px, calc(100vw - 420px), 16px)',
       }}>
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
@@ -351,7 +363,28 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                     Preparing payment…
                   </div>
                 ) : (
-                  <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: 'stripe', variables: { colorPrimary: '#3b82f6', borderRadius: '8px' } } }}>
+                  <Elements stripe={stripePromise} options={{
+                    clientSecret,
+                    fonts: [{ cssSrc: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap' }],
+                    appearance: {
+                      theme: 'stripe',
+                      variables: {
+                        fontFamily: '"JetBrains Mono", monospace',
+                        fontSizeBase: '13px',
+                        colorPrimary: '#111827',
+                        colorBackground: '#f9fafb',
+                        borderRadius: '7px',
+                        spacingUnit: '4px',
+                        spacingGridRow: '12px',
+                      },
+                      rules: {
+                        '.Input': { padding: '8px 10px', border: '1.5px solid #e2e8f0' },
+                        '.Input:focus': { border: '1.5px solid #111827', boxShadow: 'none' },
+                        '.Tab': { padding: '8px 12px', fontSize: '12px' },
+                        '.TabLabel': { fontWeight: '600' },
+                      },
+                    },
+                  }}>
                     <PaymentForm
                       row={row} col={col}
                       formData={{ ownerName, contentText, imageUrl, contact, bgColor }}

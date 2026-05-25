@@ -1,0 +1,20 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="40" height="40" rx="8" fill="#111827"/>
+  <!-- 3x3 grid: padding=3, cell=10, gap=2 -->
+  <!-- x/y positions: 3, 15, 27 -->
+
+  <!-- Row 0 -->
+  <rect x="3"  y="3"  width="10" height="10" rx="2" fill="#3b82f6"/>
+  <rect x="15" y="3"  width="10" height="10" rx="2" fill="#1e293b"/>
+  <rect x="27" y="3"  width="10" height="10" rx="2" fill="#1e293b"/>
+
+  <!-- Row 1 -->
+  <rect x="3"  y="15" width="10" height="10" rx="2" fill="#1e293b"/>
+  <rect x="15" y="15" width="10" height="10" rx="2" fill="#22c55e"/>
+  <rect x="27" y="15" width="10" height="10" rx="2" fill="#1e293b"/>
+
+  <!-- Row 2 -->
+  <rect x="3"  y="27" width="10" height="10" rx="2" fill="#1e293b"/>
+  <rect x="15" y="27" width="10" height="10" rx="2" fill="#1e293b"/>
+  <rect x="27" y="27" width="10" height="10" rx="2" fill="#f59e0b"/>
+</svg>
