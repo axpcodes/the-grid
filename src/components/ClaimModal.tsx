@@ -200,6 +200,9 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const [contact,      setContact]    = useState('')
   const [clientSecret, setClientSecret] = useState<string | null>(null)
   const [piError,      setPiError]    = useState('')
+  const [couponInput,  setCouponInput]  = useState('')
+  const [couponError,  setCouponError]  = useState('')
+  const [couponBusy,   setCouponBusy]   = useState(false)
 
   const cellNum = row * COLS + col + 1
 
@@ -222,6 +225,31 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
         setStep(2)
       })
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCouponClaim = async () => {
+    const code = couponInput.trim()
+    if (!code) { setCouponError('Enter a coupon code.'); return }
+    setCouponBusy(true)
+    setCouponError('')
+    try {
+      const res = await fetch('/api/coupon-claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ couponCode: code, row, col, ownerName, contentText, imageUrl, contact, bgColor }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Something went wrong.')
+      onClaimed(rowToCell({
+        id: `${row}:${col}`, row_idx: row, col_idx: col,
+        owner_name: ownerName, content_text: contentText,
+        image_url: imageUrl, contact, bg_color: bgColor,
+        claimed_at: new Date().toISOString(),
+      }))
+    } catch (err: unknown) {
+      setCouponError(err instanceof Error ? err.message : 'Something went wrong.')
+      setCouponBusy(false)
+    }
+  }
 
   const goNext = () => {
     setStep(s => s + 1)
@@ -471,7 +499,8 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                   Step 3 — Payment
               ──────────────────────────────────────────────────────────── */}
               {step === 3 && (
-                <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+                  {/* Stripe payment */}
                   {!clientSecret ? (
                     <div style={{ textAlign: 'center', padding: '48px 0', color: '#6b7280', fontSize: '14px' }}>
                       Preparing payment…
@@ -507,6 +536,44 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       />
                     </Elements>
                   )}
+
+                  {/* ── Coupon code alternative ── */}
+                  <div style={{
+                    borderTop: '1px solid #f3f4f6',
+                    marginTop: '20px', paddingTop: '16px',
+                    display: 'flex', flexDirection: 'column', gap: '8px',
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center', letterSpacing: '0.04em' }}>
+                      — or use a coupon code —
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        value={couponInput}
+                        onChange={e => { setCouponInput(e.target.value); setCouponError('') }}
+                        onKeyDown={e => e.key === 'Enter' && handleCouponClaim()}
+                        placeholder="Coupon code"
+                        disabled={couponBusy}
+                        style={{ ...inp, flex: 1 }}
+                      />
+                      <button
+                        onClick={handleCouponClaim}
+                        disabled={couponBusy || !couponInput.trim()}
+                        style={{
+                          ...btnPrimary, width: 'auto', padding: '9px 16px',
+                          background: couponBusy ? '#9ca3af' : '#111827',
+                          cursor: couponBusy ? 'not-allowed' : 'pointer',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {couponBusy ? '…' : 'Claim →'}
+                      </button>
+                    </div>
+                    {couponError && (
+                      <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
+                        {couponError}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>
