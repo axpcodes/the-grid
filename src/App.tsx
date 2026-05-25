@@ -22,11 +22,11 @@ export function App() {
       .from('cells')
       .select('*')
       .then(({ data, error }) => {
-        if (error) { console.error('Failed to load cells:', error); return }
+        if (error) console.error('Failed to load cells:', error)
         const map = new Map<string, CellData>()
         for (const row of data ?? []) map.set(row.id, rowToCell(row))
         setCells(map)
-        setLoading(false)
+        setLoading(false) // always clear loading, even on error
       })
 
     // Realtime: show new claims from other users instantly
