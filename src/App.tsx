@@ -324,9 +324,6 @@ export function App() {
             <div style={{ fontSize: '15px', fontWeight: 800, color: '#111827', letterSpacing: '-0.02em', lineHeight: 1 }}>
               The Grid
             </div>
-            <div style={{ fontSize: '11px', color: 'rgba(0,0,0,0.38)', marginTop: '2px' }}>
-              $1 to lock a cell forever
-            </div>
           </div>
         </div>
 

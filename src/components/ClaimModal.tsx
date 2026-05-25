@@ -57,6 +57,26 @@ function StepBar({ step, total }: { step: number; total: number }) {
   )
 }
 
+// ── Image resize helper (client-side, no storage needed) ─────────────────────
+function resizeImage(file: File, maxPx = 512, quality = 0.82): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height))
+      const w = Math.round(img.width * scale)
+      const h = Math.round(img.height * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = w; canvas.height = h
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = reject
+    img.src = url
+  })
+}
+
 // ── Canvas preview — pixel-identical to the grid at any zoom ──────────────────
 function CellCanvas({
   bgColor, imageUrl, contentText, size = PREVIEW_SIZE,
@@ -163,9 +183,6 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <div style={{ fontSize: '10px', color: '#9ca3af', letterSpacing: '0.06em' }}>
-        Permanent · non-refundable
-      </div>
       <PaymentElement options={{ layout: { type: 'tabs', defaultCollapsed: false } }} />
       {error && (
         <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: '#dc2626' }}>
@@ -402,6 +419,10 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       />
                     </div>
 
+                    <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '-6px' }}>
+                      Leave it blank to post anonymously.
+                    </div>
+
                     <div>
                       <label style={lbl}>
                         Message{' '}
@@ -410,7 +431,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       <textarea
                         value={contentText}
                         onChange={e => setContentText(e.target.value)}
-                        placeholder="Say something to the world…"
+                        placeholder="Leave something for the world…"
                         maxLength={200} rows={3}
                         style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
                       />
@@ -421,10 +442,56 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
 
                     <div>
                       <label style={lbl}>
-                        Background image URL{' '}
+                        Background image{' '}
                         <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
                       </label>
-                      <input value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="https://…" style={inp} />
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        {/* File upload button */}
+                        <label style={{
+                          display: 'flex', alignItems: 'center', gap: '5px',
+                          padding: '0 12px', height: '38px', borderRadius: '8px',
+                          border: '1.5px solid #e2e8f0', background: '#fafafa',
+                          cursor: 'pointer', fontSize: '13px', color: '#374151',
+                          flexShrink: 0, whiteSpace: 'nowrap', boxSizing: 'border-box',
+                        }}>
+                          <input
+                            type="file" accept="image/*" style={{ display: 'none' }}
+                            onChange={async e => {
+                              const file = e.target.files?.[0]
+                              if (!file) return
+                              try { setImageUrl(await resizeImage(file)) } catch { /* ignore */ }
+                              e.target.value = ''  // reset so same file can be re-selected
+                            }}
+                          />
+                          ↑ Upload
+                        </label>
+                        {/* URL paste fallback — hidden when a data URL is loaded */}
+                        {!imageUrl.startsWith('data:') && (
+                          <input
+                            value={imageUrl}
+                            onChange={e => setImageUrl(e.target.value)}
+                            placeholder="or paste a URL…"
+                            style={{ ...inp, flex: 1 }}
+                          />
+                        )}
+                        {/* Thumbnail + remove when image is loaded */}
+                        {imageUrl && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flex: 1, minWidth: 0 }}>
+                            <img
+                              src={imageUrl} alt=""
+                              style={{ width: '36px', height: '36px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0', flexShrink: 0 }}
+                              onError={() => setImageUrl('')}
+                            />
+                            <span style={{ fontSize: '11px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                              {imageUrl.startsWith('data:') ? 'Image uploaded ✓' : imageUrl}
+                            </span>
+                            <button
+                              onClick={() => setImageUrl('')}
+                              style={{ fontSize: '13px', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
+                            >×</button>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div>
@@ -489,7 +556,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       ...btnPrimary, flex: 1,
                       background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     }}>
-                      Place it · $1 →
+                      Lock the cell · $1 →
                     </button>
                   </div>
                 </div>
