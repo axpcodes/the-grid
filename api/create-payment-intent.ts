@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: 100, // $1.00 in cents
       currency: 'usd',
+      payment_method_types: ['card', 'cashapp'],
       // Store cell data in metadata so confirm-cell can write it after payment
       metadata: {
         row:         String(row),
