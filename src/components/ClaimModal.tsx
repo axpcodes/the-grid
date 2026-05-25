@@ -339,11 +339,11 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                         value={contentText}
                         onChange={e => setContentText(e.target.value)}
                         placeholder="Leave something for the world…"
-                        maxLength={200} rows={3}
+                        maxLength={3000} rows={6}
                         style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
                       />
                       <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '3px', textAlign: 'right' }}>
-                        {contentText.length}/200
+                        {contentText.length}/3000
                       </div>
                     </div>
 
