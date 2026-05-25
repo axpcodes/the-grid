@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/routes/errands", "destination": "/index.html" }
+  ]
+}
