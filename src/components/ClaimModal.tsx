@@ -212,7 +212,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
             <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#111827', margin: '2px 0 0' }}>
               {cell
                 ? 'This cell is taken'
-                : step === 1 ? 'Leave your mark'
+                : step === 1 ? 'Make it yours'
                 : step === 2 ? 'One last look'
                 : `Lock cell #${cellNum.toLocaleString()}`}
             </h2>
