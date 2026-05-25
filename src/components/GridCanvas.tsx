@@ -1,13 +1,14 @@
 import { useRef, useEffect, useLayoutEffect } from 'react'
 import type { CellData } from '../types'
+import { drawCell } from '../lib/renderCell'
+import type { ImgCache } from '../lib/renderCell'
 
-const COLS = 100
-const ROWS = 100
-const CELL_SIZE = 64 // world-space pixels per cell
-// MIN_ZOOM is dynamic — computed from canvas size so the grid always fills the viewport
+export const COLS = 1000
+export const ROWS = 1000
+const CELL_SIZE = 64  // world-space pixels per cell
+// Min zoom: cells must be at least MIN_CELL_PX pixels wide on screen
+const MIN_CELL_PX = 3
 const MAX_ZOOM = 8
-
-type ImgEntry = HTMLImageElement | 'loading' | 'error'
 
 interface Props {
   cells: Map<string, CellData>
@@ -29,7 +30,7 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
 
   useEffect(() => {
     const canvas = canvasRef.current!
-    const imgCache = new Map<string, ImgEntry>()
+    const imgCache: ImgCache = new Map()
     let zoom = 0.2
     let panX = 0
     let panY = 0
@@ -43,35 +44,8 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
 
     // ── helpers ────────────────────────────────────────────────────────────
 
-    const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] => {
-      const words = text.split(' ')
-      const lines: string[] = []
-      let current = ''
-      for (const word of words) {
-        const test = current ? `${current} ${word}` : word
-        if (ctx.measureText(test).width > maxW && current) {
-          lines.push(current)
-          current = word
-        } else {
-          current = test
-        }
-      }
-      if (current) lines.push(current)
-      return lines.length ? lines : [text]
-    }
-
     const getCell = (r: number, c: number) =>
       cellsRef.current.get(`${r}:${c}`) ?? null
-
-    const loadImage = (url: string) => {
-      if (imgCache.has(url)) return
-      imgCache.set(url, 'loading')
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => { imgCache.set(url, img); draw() }
-      img.onerror = () => { imgCache.set(url, 'error') }
-      img.src = url
-    }
 
     const wrap = (n: number, max: number) => ((n % max) + max) % max
 
@@ -93,7 +67,7 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
       ctx.clearRect(0, 0, W, H)
 
       const cellW = CELL_SIZE * zoom
-      if (cellW < 0.5) return // too zoomed out to render meaningfully
+      if (cellW < 0.5) return
 
       // Visible range — unclamped for infinite wrapping
       const colStart = Math.floor(-panX / cellW)
@@ -108,96 +82,21 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
           const sx = Math.floor(col * cellW + panX)
           const sy = Math.floor(row * cellW + panY)
           const sw = Math.ceil(cellW)
-          const sh = Math.ceil(cellW)
           const cell = getCell(realRow, realCol)
           const hovered = hoveredCell?.row === realRow && hoveredCell?.col === realCol
 
-          // ── background ──
-          ctx.fillStyle = cell
-            ? (cell.bgColor || '#ffffff')
-            : hovered ? '#dde8ff' : '#eef0f5'
-          ctx.fillRect(sx, sy, sw, sh)
-
-          // ── image ──
-          if (cell?.imageUrl) {
-            loadImage(cell.imageUrl)
-            const cached = imgCache.get(cell.imageUrl)
-            if (cached && cached !== 'loading' && cached !== 'error') {
-              ctx.save()
-              ctx.beginPath()
-              ctx.rect(sx, sy, sw, sh)
-              ctx.clip()
-              ctx.drawImage(cached as HTMLImageElement, sx, sy, sw, sh)
-              ctx.restore()
-            }
-          }
-
-          // ── text (vector: font sized so wrapped block fills cell squarely) ──
-          if (cell?.contentText) {
-            ctx.save()
-            ctx.beginPath()
-            ctx.rect(sx + 2, sy + 2, sw - 4, sh - 4)
-            ctx.clip()
-
-            const S = CELL_SIZE * 0.94       // target square size in world units
-            const LINE_H_RATIO = 1.25
-            const CHAR_W_RATIO = 0.55        // avg char width / font size estimate
-
-            // Compute font size that fills a square: derive from text length
-            const N = cell.contentText.length
-            const squareFit = S / Math.sqrt(N * CHAR_W_RATIO * LINE_H_RATIO)
-            // Clamp: don't exceed a comfortable max, don't go invisible
-            const baseFontSize = Math.min(CELL_SIZE * 0.18, Math.max(CELL_SIZE * 0.04, squareFit))
-
-            // Wrap at computed size BEFORE zoom transform (world-space units = CSS px)
-            ctx.font = `${baseFontSize}px system-ui, sans-serif`
-            const lines = wrapText(ctx, cell.contentText, S)
-            const lineHeight = baseFontSize * LINE_H_RATIO
-            const totalHeight = lines.length * lineHeight
-            const maxLineW = Math.max(...lines.map(l => ctx.measureText(l).width))
-
-            // Safety scale-down if still overflows (edge cases / tight wrapping)
-            const scale = Math.min(1, S / totalHeight, S / maxLineW)
-            const finalFontSize = baseFontSize * scale
-            const finalLineHeight = lineHeight * scale
-
-            // Draw with zoom transform for true vector scaling
-            ctx.translate(sx + sw / 2, sy + sh / 2)
-            ctx.scale(zoom, zoom)
-            ctx.font = `${finalFontSize}px system-ui, sans-serif`
-            ctx.fillStyle = 'rgba(0,0,0,0.82)'
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-
-            const startY = -(lines.length - 1) / 2 * finalLineHeight
-            lines.forEach((line, i) => {
-              ctx.fillText(line, 0, startY + i * finalLineHeight)
-            })
-            ctx.restore()
-          }
-
-          // ── border ──
-          if (hovered) {
-            ctx.strokeStyle = '#3b82f6'
-            ctx.lineWidth = 2
-            ctx.strokeRect(sx + 1, sy + 1, sw - 2, sh - 2)
-          } else {
-            ctx.strokeStyle = 'rgba(0,0,0,0.10)'
-            ctx.lineWidth = 0.5
-            ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
-          }
-
-          // ── claimed dot ──
-          if (cell && sw > 10) {
-            ctx.fillStyle = '#22c55e'
-            ctx.beginPath()
-            ctx.arc(sx + sw - 5, sy + 5, Math.min(3, sw * 0.06), 0, Math.PI * 2)
-            ctx.fill()
-          }
+          drawCell(ctx, {
+            x: sx, y: sy, size: sw,
+            bgColor: cell ? (cell.bgColor || '#ffffff') : (hovered ? '#dde8ff' : '#eef0f5'),
+            contentText: cell?.contentText,
+            imageUrl: cell?.imageUrl,
+            imgCache, onImageLoad: draw,
+            hovered, claimed: !!cell,
+          })
         }
       }
 
-      // ── coordinates label at higher zoom ──
+      // ── cell number label at higher zoom (unclaimed cells only) ──
       if (cellW > 28) {
         ctx.fillStyle = 'rgba(0,0,0,0.22)'
         const fs = Math.max(7, Math.min(cellW * 0.11, 10))
@@ -210,7 +109,7 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
             if (!getCell(rr, rc)) {
               const sx = col * cellW + panX
               const sy = row * cellW + panY
-              ctx.fillText(`${rr},${rc}`, sx + 2, sy + 2)
+              ctx.fillText(`#${rr * COLS + rc + 1}`, sx + 2, sy + 2)
             }
           }
         }
@@ -221,11 +120,8 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
 
     // ── resize ─────────────────────────────────────────────────────────────
 
-    // Grid must fill the viewport — zoom out no further than this
-    const minZoom = () => Math.max(
-      canvas.width / (COLS * CELL_SIZE),
-      canvas.height / (ROWS * CELL_SIZE)
-    )
+    // Cells must be at least MIN_CELL_PX wide on screen
+    const minZoom = () => MIN_CELL_PX / CELL_SIZE
 
     const resize = () => {
       canvas.width = canvas.offsetWidth

@@ -256,7 +256,7 @@ export function App() {
         pointerEvents: 'none', userSelect: 'none', textAlign: 'right',
       }}>
         <span style={{ color: '#16a34a', fontWeight: 700 }}>{cells.size.toLocaleString()}</span>
-        {' / 10,000 claimed'}
+        {' / 1,000,000 claimed'}
       </div>
 
       {modal && (

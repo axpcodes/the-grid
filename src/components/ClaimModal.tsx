@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { loadStripe } from '@stripe/stripe-js'
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import type { CellData } from '../types'
 import { rowToCell } from '../types'
+import { drawCell } from '../lib/renderCell'
+import type { ImgCache } from '../lib/renderCell'
+import { COLS } from './GridCanvas'
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
 
-const COLS = 100
+const PREVIEW_SIZE = 260  // canvas side length in CSS/device-independent px
 
 interface Props {
   row: number
@@ -16,72 +19,88 @@ interface Props {
   onClaimed: (cell: CellData) => void
 }
 
-// ── Shared styles ─────────────────────────────────────────────────────────────
+// ── Shared styles ──────────────────────────────────────────────────────────────
 const inp: React.CSSProperties = {
   width: '100%', padding: '9px 12px',
   border: '1.5px solid #e2e8f0', borderRadius: '8px',
-  fontSize: '15px', outline: 'none', background: '#fafafa', boxSizing: 'border-box',
+  fontSize: '14px', outline: 'none', background: '#fafafa',
+  boxSizing: 'border-box', fontFamily: 'inherit',
 }
 const lbl: React.CSSProperties = {
-  display: 'block', fontWeight: 600, fontSize: '13px',
+  display: 'block', fontWeight: 700, fontSize: '11px',
   marginBottom: '5px', color: '#374151',
+  textTransform: 'uppercase', letterSpacing: '0.07em',
 }
 const btnPrimary: React.CSSProperties = {
   background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff',
   border: 'none', borderRadius: '10px', padding: '12px 16px',
-  fontSize: '15px', fontWeight: 700, cursor: 'pointer', width: '100%',
+  fontSize: '14px', fontWeight: 700, cursor: 'pointer', width: '100%', fontFamily: 'inherit',
 }
 const btnSecondary: React.CSSProperties = {
   background: '#f3f4f6', color: '#374151', border: 'none',
-  borderRadius: '10px', padding: '12px 16px', fontSize: '15px', fontWeight: 600, cursor: 'pointer',
+  borderRadius: '10px', padding: '12px 16px', fontSize: '14px',
+  fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
 }
 
-// ── Step dots ─────────────────────────────────────────────────────────────────
-function StepDots({ step, total }: { step: number; total: number }) {
+// ── Step progress bar ──────────────────────────────────────────────────────────
+function StepBar({ step, total }: { step: number; total: number }) {
   return (
-    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', marginBottom: '20px' }}>
+    <div style={{ display: 'flex', gap: '5px', marginBottom: '24px' }}>
       {Array.from({ length: total }, (_, i) => i + 1).map(n => (
         <div key={n} style={{
-          width: n === step ? '20px' : '8px', height: '8px', borderRadius: '4px',
+          height: '3px', flex: n === step ? 2 : 1, borderRadius: '2px',
           background: n === step ? '#3b82f6' : n < step ? '#93c5fd' : '#e2e8f0',
-          transition: 'all 0.25s',
+          transition: 'all 0.3s ease',
         }} />
       ))}
     </div>
   )
 }
 
-// ── Cell preview ──────────────────────────────────────────────────────────────
-function CellPreview({ bgColor, imageUrl, contentText }: { bgColor: string; imageUrl: string; contentText: string }) {
+// ── Canvas preview — pixel-identical to the grid at any zoom ──────────────────
+function CellCanvas({
+  bgColor, imageUrl, contentText, size = PREVIEW_SIZE,
+}: {
+  bgColor: string; imageUrl: string; contentText: string; size?: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const imgCacheRef = useRef<ImgCache>(new Map())
+
+  const redraw = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')!
+    ctx.clearRect(0, 0, size, size)
+    drawCell(ctx, {
+      x: 0, y: 0, size,
+      bgColor: bgColor || '#ffffff',
+      contentText: contentText || undefined,
+      imageUrl: imageUrl || undefined,
+      imgCache: imgCacheRef.current,
+      onImageLoad: redraw,
+      claimed: !!(contentText || imageUrl || bgColor !== '#ffffff'),
+    })
+  }, [bgColor, imageUrl, contentText, size])
+
+  useEffect(() => { redraw() }, [redraw])
+
   return (
-    <div style={{
-      width: '100%', aspectRatio: '1', background: bgColor,
-      borderRadius: '12px', overflow: 'hidden', position: 'relative',
-      border: '2px solid #e2e8f0', marginBottom: '12px',
-    }}>
-      {imageUrl && (
-        <img src={imageUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-      )}
-      {contentText && (
-        <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', padding: '16px', fontSize: '15px',
-          color: '#111', textAlign: 'center', wordBreak: 'break-word', lineHeight: 1.5, fontWeight: 500,
-        }}>
-          {contentText}
-        </div>
-      )}
-      {!contentText && !imageUrl && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(0,0,0,0.2)', fontSize: '13px', fontStyle: 'italic' }}>
-          empty cell
-        </div>
-      )}
-    </div>
+    <canvas
+      ref={canvasRef}
+      width={size}
+      height={size}
+      style={{
+        width: `${size}px`, height: `${size}px`,
+        borderRadius: '14px',
+        border: '2px solid rgba(0,0,0,0.08)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+        display: 'block',
+      }}
+    />
   )
 }
 
-// ── Stripe payment form (must be inside <Elements>) ───────────────────────────
+// ── Stripe payment form ────────────────────────────────────────────────────────
 function PaymentForm({ row, col, formData, onSuccess, onBack }: {
   row: number
   col: number
@@ -99,10 +118,9 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
     setPaying(true)
     setError('')
 
-    // 1. Confirm the payment (card form, Apple Pay, etc.)
     const { error: stripeError, paymentIntent } = await stripe.confirmPayment({
       elements,
-      redirect: 'if_required', // keep user on page for card payments
+      redirect: 'if_required',
     })
 
     if (stripeError) {
@@ -117,7 +135,6 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
       return
     }
 
-    // 2. Tell our server to write the cell to Supabase
     try {
       const res = await fetch('/api/confirm-cell', {
         method: 'POST',
@@ -127,7 +144,6 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Failed to claim cell')
 
-      // Build local CellData to update the grid immediately
       const cell = rowToCell({
         id: `${row}:${col}`,
         row_idx: row, col_idx: col,
@@ -146,13 +162,13 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
         humans only please 🤖
       </div>
       <PaymentElement options={{ layout: { type: 'tabs', defaultCollapsed: false } }} />
       {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: '#dc2626' }}>
           {error}
         </div>
       )}
@@ -161,9 +177,13 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
         <button
           onClick={handlePay}
           disabled={paying || !stripe || !elements}
-          style={{ ...btnPrimary, flex: 1, background: paying ? '#9ca3af' : 'linear-gradient(135deg, #16a34a, #15803d)', cursor: paying ? 'not-allowed' : 'pointer' }}
+          style={{
+            ...btnPrimary, flex: 1,
+            background: paying ? '#9ca3af' : 'linear-gradient(135deg, #16a34a, #15803d)',
+            cursor: paying ? 'not-allowed' : 'pointer',
+          }}
         >
-          {paying ? 'Processing…' : 'Pay $1 & place my mark'}
+          {paying ? 'Processing…' : 'Pay $1 · place my mark'}
         </button>
       </div>
     </div>
@@ -172,21 +192,21 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
 
 // ── Main modal ────────────────────────────────────────────────────────────────
 export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
-  const [step, setStep] = useState(1)
-  const [ownerName,    setOwnerName]    = useState('')
-  const [contentText,  setContentText]  = useState('')
-  const [bgColor,      setBgColor]      = useState('#ffffff')
-  const [imageUrl,     setImageUrl]     = useState('')
-  const [contact,      setContact]      = useState('')
-  const [nameError,    setNameError]    = useState('')
+  const [step, setStep]               = useState(1)
+  const [ownerName,    setOwnerName]  = useState('')
+  const [contentText,  setContentText] = useState('')
+  const [bgColor,      setBgColor]    = useState('#ffffff')
+  const [imageUrl,     setImageUrl]   = useState('')
+  const [contact,      setContact]    = useState('')
+  const [nameError,    setNameError]  = useState('')
   const [clientSecret, setClientSecret] = useState<string | null>(null)
-  const [piError,      setPiError]      = useState('')
+  const [piError,      setPiError]    = useState('')
 
   const cellNum = row * COLS + col + 1
 
-  // Create a PaymentIntent when the user reaches the payment step
+  // Create PaymentIntent when step 3 opens
   useEffect(() => {
-    if (step !== 4 || clientSecret) return
+    if (step !== 3 || clientSecret) return
     setPiError('')
     fetch('/api/create-payment-intent', {
       method: 'POST',
@@ -200,7 +220,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
       })
       .catch(err => {
         setPiError(err.message ?? 'Could not initialise payment. Try again.')
-        setStep(3) // bounce back
+        setStep(2)
       })
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -210,193 +230,289 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
     setStep(s => s + 1)
   }
   const goBack = () => setStep(s => s - 1)
+  const handleBackdrop = (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose() }
 
-  const handleBackdrop = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose()
-  }
-
-  const stepTitle = cell ? 'This space is taken'
-    : step === 1 ? 'Leave your mark'
-    : step === 2 ? 'Leave a trace'
-    : step === 3 ? 'Preview'
-    : 'Payment'
+  // Two-column layout when viewport is wide enough
+  const wide = window.innerWidth >= 640
 
   return (
     <div onClick={handleBackdrop} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-      zIndex: 100, padding: '0',
-    }}
-      // On wider screens center it like a card; on mobile it slides up from bottom
-    >
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 100, padding: '16px',
+    }}>
       <div style={{
         background: '#fff',
-        borderRadius: 'clamp(0px, calc(100vw - 420px), 16px) clamp(0px, calc(100vw - 420px), 16px) 0 0',
-        padding: '24px',
-        width: '100%', maxWidth: '420px',
+        borderRadius: '20px',
+        width: '100%',
+        maxWidth: cell ? '420px' : step === 1 ? '740px' : '480px',
         maxHeight: '92dvh', overflowY: 'auto',
-        boxShadow: '0 -4px 40px rgba(0,0,0,0.2)',
-        // On desktop, detach from bottom
-        marginBottom: 'clamp(0px, calc((100vw - 420px) / 2), 5vh)',
-        borderBottomLeftRadius: 'clamp(0px, calc(100vw - 420px), 16px)',
-        borderBottomRightRadius: 'clamp(0px, calc(100vw - 420px), 16px)',
+        boxShadow: '0 32px 80px rgba(0,0,0,0.30)',
+        transition: 'max-width 0.3s ease',
       }}>
+
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+          padding: '22px 24px 0',
+        }}>
           <div>
             <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              Cell #{cellNum}
+              Cell #{cellNum.toLocaleString()}
             </div>
-            <h2 style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '2px' }}>
-              {stepTitle}
+            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#111827', margin: '2px 0 0' }}>
+              {cell
+                ? 'This space is taken'
+                : step === 1 ? 'Leave your mark'
+                : step === 2 ? 'Preview your cell'
+                : 'Secure your spot'}
             </h2>
           </div>
-          <button onClick={onClose} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer', fontSize: '18px', color: '#6b7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+          <button onClick={onClose} style={{
+            background: '#f3f4f6', border: 'none', borderRadius: '50%',
+            width: '34px', height: '34px', cursor: 'pointer', fontSize: '20px', lineHeight: 1,
+            color: '#6b7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>×</button>
         </div>
 
-        {/* ── Already claimed — read-only ── */}
-        {cell ? (
-          <div>
-            <div style={{ height: '1px', background: '#f3f4f6', margin: '16px 0' }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-              <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: cell.bgColor || '#e2e8f0', border: '2px solid #e2e8f0', flexShrink: 0 }} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '15px', color: '#111827' }}>{cell.ownerName}</div>
-                <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-                  {new Date(cell.claimedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+        <div style={{ padding: '18px 24px 24px' }}>
+
+          {/* ── Already claimed ── */}
+          {cell ? (
+            <div>
+              <div style={{ height: '1px', background: '#f3f4f6', margin: '14px 0' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                <div style={{
+                  width: '38px', height: '38px', borderRadius: '50%',
+                  background: cell.bgColor || '#e2e8f0', border: '2px solid #e2e8f0', flexShrink: 0,
+                }} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#111827' }}>{cell.ownerName}</div>
+                  <div style={{ fontSize: '12px', color: '#9ca3af' }}>
+                    {new Date(cell.claimedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                  </div>
                 </div>
               </div>
+              {cell.imageUrl && (
+                <img src={cell.imageUrl} alt="" style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', objectFit: 'cover', maxHeight: '200px' }} />
+              )}
+              {cell.contentText && (
+                <p style={{ color: '#374151', lineHeight: 1.6, fontSize: '15px', marginBottom: '10px' }}>{cell.contentText}</p>
+              )}
+              {cell.contact && (
+                <a href={cell.contact.startsWith('http') ? cell.contact : `https://${cell.contact}`}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: '13px', color: '#3b82f6', wordBreak: 'break-all' }}>
+                  {cell.contact}
+                </a>
+              )}
+              {!cell.contentText && !cell.imageUrl && !cell.contact && (
+                <p style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '14px' }}>No content added.</p>
+              )}
             </div>
-            {cell.imageUrl && <img src={cell.imageUrl} alt="" style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', objectFit: 'cover', maxHeight: '200px' }} />}
-            {cell.contentText && <p style={{ color: '#374151', lineHeight: 1.6, fontSize: '15px', marginBottom: '10px' }}>{cell.contentText}</p>}
-            {cell.contact && (
-              <a href={cell.contact.startsWith('http') ? cell.contact : `https://${cell.contact}`} target="_blank" rel="noopener noreferrer"
-                style={{ fontSize: '13px', color: '#3b82f6', wordBreak: 'break-all' }}>{cell.contact}</a>
-            )}
-            {!cell.contentText && !cell.imageUrl && !cell.contact && (
-              <p style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '14px' }}>No content added.</p>
-            )}
-          </div>
 
-        ) : (
-          /* ── Claim flow ── */
-          <>
-            <StepDots step={step} total={4} />
+          ) : (
+            /* ── Claim flow ── */
+            <>
+              <StepBar step={step} total={3} />
 
-            {/* Step 1 — Identity */}
-            {step === 1 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div>
-                  <label style={lbl}>Your name *</label>
-                  <input value={ownerName} onChange={e => { setOwnerName(e.target.value); setNameError('') }}
-                    placeholder="What should we call you?" maxLength={40} autoFocus
-                    style={{ ...inp, borderColor: nameError ? '#f87171' : '#e2e8f0' }} />
-                  {nameError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{nameError}</div>}
-                </div>
-                <div>
-                  <label style={lbl}>Message <span style={{ fontWeight: 400, color: '#9ca3af' }}>(optional)</span></label>
-                  <textarea value={contentText} onChange={e => setContentText(e.target.value)}
-                    placeholder="Say something to the world…" maxLength={200} rows={3}
-                    style={{ ...inp, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
-                  <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px', textAlign: 'right' }}>{contentText.length}/200</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <label style={{ ...lbl, marginBottom: 0 }}>Background color</label>
-                  <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
-                    style={{ width: '44px', height: '36px', border: '1.5px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', padding: '2px' }} />
-                  <span style={{ fontSize: '13px', color: '#6b7280', fontFamily: 'monospace' }}>{bgColor}</span>
-                </div>
-                <button onClick={goNext} style={btnPrimary}>Next →</button>
-              </div>
-            )}
+              {/* ────────────────────────────────────────────────────────────
+                  Step 1 — Design your cell (two-column on desktop)
+              ──────────────────────────────────────────────────────────── */}
+              {step === 1 && (
+                <div style={{
+                  display: 'flex',
+                  flexDirection: wide ? 'row' : 'column',
+                  gap: wide ? '32px' : '20px',
+                  alignItems: wide ? 'flex-start' : 'stretch',
+                }}>
 
-            {/* Step 2 — Links */}
-            {step === 2 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <p style={{ fontSize: '14px', color: '#6b7280', margin: 0 }}>Optional — add an image or link so people can find you.</p>
+                  {/* Left: live canvas preview */}
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px',
+                    flexShrink: 0,
+                    width: wide ? `${PREVIEW_SIZE}px` : '100%',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+                      <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={PREVIEW_SIZE} />
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>
+                      live preview
+                    </div>
+                    {/* Color swatch row for quick picks */}
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '4px' }}>
+                      {['#ffffff', '#111827', '#fef9c3', '#dbeafe', '#dcfce7', '#fce7f3', '#f3f4f6', '#fde68a'].map(c => (
+                        <button key={c} onClick={() => setBgColor(c)} style={{
+                          width: '22px', height: '22px', borderRadius: '6px', background: c,
+                          border: bgColor === c ? '2px solid #3b82f6' : '1.5px solid rgba(0,0,0,0.12)',
+                          cursor: 'pointer', padding: 0,
+                        }} />
+                      ))}
+                      {/* Custom color picker */}
+                      <label style={{ position: 'relative', width: '22px', height: '22px', cursor: 'pointer' }}>
+                        <div style={{
+                          width: '22px', height: '22px', borderRadius: '6px',
+                          background: 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)',
+                          border: '1.5px solid rgba(0,0,0,0.12)',
+                        }} />
+                        <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
+                          style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }} />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Right: form */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '13px', minWidth: 0 }}>
+                    <div>
+                      <label style={lbl}>Your name *</label>
+                      <input
+                        value={ownerName}
+                        onChange={e => { setOwnerName(e.target.value); setNameError('') }}
+                        placeholder="What should we call you?"
+                        maxLength={40} autoFocus
+                        style={{ ...inp, borderColor: nameError ? '#f87171' : '#e2e8f0' }}
+                      />
+                      {nameError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{nameError}</div>}
+                    </div>
+
+                    <div>
+                      <label style={lbl}>
+                        Message{' '}
+                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+                      </label>
+                      <textarea
+                        value={contentText}
+                        onChange={e => setContentText(e.target.value)}
+                        placeholder="Say something to the world…"
+                        maxLength={200} rows={3}
+                        style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
+                      />
+                      <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '3px', textAlign: 'right' }}>
+                        {contentText.length}/200
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={lbl}>
+                        Background image URL{' '}
+                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+                      </label>
+                      <input value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="https://…" style={inp} />
+                    </div>
+
+                    <div>
+                      <label style={lbl}>
+                        Your link{' '}
+                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+                      </label>
+                      <input
+                        value={contact}
+                        onChange={e => setContact(e.target.value)}
+                        placeholder="website, @handle, email…"
+                        maxLength={100} style={inp}
+                      />
+                    </div>
+
+                    <button onClick={goNext} style={{ ...btnPrimary, marginTop: '6px' }}>
+                      Preview my cell →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ────────────────────────────────────────────────────────────
+                  Step 2 — Preview + confirm
+              ──────────────────────────────────────────────────────────── */}
+              {step === 2 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  {/* Big preview */}
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={300} />
+                      <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>
+                        exactly what the world will see
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary */}
+                  <div style={{ background: '#f9fafb', borderRadius: '12px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <div style={{ fontSize: '12px', color: '#374151' }}><strong>Name:</strong> {ownerName}</div>
+                    {contentText && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Message:</strong> {contentText}</div>}
+                    {contact && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Link:</strong> {contact}</div>}
+                    {imageUrl && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Image:</strong> ✓</div>}
+                  </div>
+
+                  {/* Permanence warning */}
+                  <div style={{
+                    background: '#fffbeb', border: '1px solid #fbbf24',
+                    borderRadius: '12px', padding: '14px 16px',
+                    fontSize: '13px', color: '#92400e', lineHeight: 1.55,
+                  }}>
+                    ⚠️ <strong>This is permanent.</strong> Once placed, your mark cannot be edited or removed — even by us. Think of it as a brushstroke on a shared canvas.
+                  </div>
+
+                  {piError && (
+                    <div style={{ color: '#dc2626', fontSize: '13px' }}>{piError}</div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={goBack} style={btnSecondary}>← Edit</button>
+                    <button onClick={goNext} style={{
+                      ...btnPrimary, flex: 1,
+                      background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                    }}>
+                      Looks good · Pay $1 →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ────────────────────────────────────────────────────────────
+                  Step 3 — Payment
+              ──────────────────────────────────────────────────────────── */}
+              {step === 3 && (
                 <div>
-                  <label style={lbl}>Image URL <span style={{ fontWeight: 400, color: '#9ca3af' }}>(optional)</span></label>
-                  <input value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="https://…" style={inp} />
-                  {imageUrl && (
-                    <img src={imageUrl} alt="preview" style={{ marginTop: '8px', width: '100%', maxHeight: '130px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #e2e8f0' }}
-                      onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-                      onLoad={e => { (e.target as HTMLImageElement).style.display = 'block' }} />
+                  {!clientSecret ? (
+                    <div style={{ textAlign: 'center', padding: '48px 0', color: '#6b7280', fontSize: '14px' }}>
+                      Preparing payment…
+                    </div>
+                  ) : (
+                    <Elements stripe={stripePromise} options={{
+                      clientSecret,
+                      fonts: [{ cssSrc: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap' }],
+                      appearance: {
+                        theme: 'stripe',
+                        variables: {
+                          fontFamily: '"JetBrains Mono", monospace',
+                          fontSizeBase: '13px',
+                          colorPrimary: '#111827',
+                          colorBackground: '#f9fafb',
+                          borderRadius: '7px',
+                          spacingUnit: '4px',
+                          spacingGridRow: '12px',
+                        },
+                        rules: {
+                          '.Input': { padding: '8px 10px', border: '1.5px solid #e2e8f0' },
+                          '.Input:focus': { border: '1.5px solid #111827', boxShadow: 'none' },
+                          '.Tab': { padding: '8px 12px', fontSize: '12px' },
+                          '.TabLabel': { fontWeight: '600' },
+                        },
+                      },
+                    }}>
+                      <PaymentForm
+                        row={row} col={col}
+                        formData={{ ownerName, contentText, imageUrl, contact, bgColor }}
+                        onSuccess={onClaimed}
+                        onBack={goBack}
+                      />
+                    </Elements>
                   )}
                 </div>
-                <div>
-                  <label style={lbl}>Your link <span style={{ fontWeight: 400, color: '#9ca3af' }}>(optional)</span></label>
-                  <input value={contact} onChange={e => setContact(e.target.value)} placeholder="website, @handle, email…" maxLength={100} style={inp} />
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={goBack} style={btnSecondary}>← Back</button>
-                  <button onClick={goNext} style={{ ...btnPrimary, flex: 1 }}>Preview →</button>
-                </div>
-              </div>
-            )}
-
-            {/* Step 3 — Preview */}
-            {step === 3 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <CellPreview bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                  {ownerName && <div style={{ fontSize: '14px', color: '#374151' }}><strong>Name:</strong> {ownerName}</div>}
-                  {contact   && <div style={{ fontSize: '14px', color: '#374151' }}><strong>Link:</strong> {contact}</div>}
-                </div>
-                <div style={{ background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: '10px', padding: '12px 14px', fontSize: '13px', color: '#92400e', lineHeight: 1.5 }}>
-                  ⚠️ <strong>This is permanent.</strong> Once placed, your mark cannot be changed or removed — even if you come back. Think of it as graffiti on a digital wall.
-                </div>
-                {piError && <div style={{ color: '#dc2626', fontSize: '13px' }}>{piError}</div>}
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={goBack} style={btnSecondary}>← Back</button>
-                  <button onClick={goNext} style={{ ...btnPrimary, flex: 1, background: 'linear-gradient(135deg, #16a34a, #15803d)' }}>
-                    Continue to payment →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Step 4 — Payment */}
-            {step === 4 && (
-              <div>
-                {!clientSecret ? (
-                  <div style={{ textAlign: 'center', padding: '32px 0', color: '#6b7280', fontSize: '14px' }}>
-                    Preparing payment…
-                  </div>
-                ) : (
-                  <Elements stripe={stripePromise} options={{
-                    clientSecret,
-                    fonts: [{ cssSrc: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap' }],
-                    appearance: {
-                      theme: 'stripe',
-                      variables: {
-                        fontFamily: '"JetBrains Mono", monospace',
-                        fontSizeBase: '13px',
-                        colorPrimary: '#111827',
-                        colorBackground: '#f9fafb',
-                        borderRadius: '7px',
-                        spacingUnit: '4px',
-                        spacingGridRow: '12px',
-                      },
-                      rules: {
-                        '.Input': { padding: '8px 10px', border: '1.5px solid #e2e8f0' },
-                        '.Input:focus': { border: '1.5px solid #111827', boxShadow: 'none' },
-                        '.Tab': { padding: '8px 12px', fontSize: '12px' },
-                        '.TabLabel': { fontWeight: '600' },
-                      },
-                    },
-                  }}>
-                    <PaymentForm
-                      row={row} col={col}
-                      formData={{ ownerName, contentText, imageUrl, contact, bgColor }}
-                      onSuccess={onClaimed}
-                      onBack={goBack}
-                    />
-                  </Elements>
-                )}
-              </div>
-            )}
-          </>
-        )}
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
