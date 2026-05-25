@@ -163,8 +163,8 @@ function PaymentForm({ row, col, formData, onSuccess, onBack }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <div style={{ fontSize: '10px', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-        humans only please 🤖
+      <div style={{ fontSize: '10px', color: '#9ca3af', letterSpacing: '0.06em' }}>
+        Permanent · non-refundable
       </div>
       <PaymentElement options={{ layout: { type: 'tabs', defaultCollapsed: false } }} />
       {error && (
@@ -198,7 +198,6 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const [bgColor,      setBgColor]    = useState('#ffffff')
   const [imageUrl,     setImageUrl]   = useState('')
   const [contact,      setContact]    = useState('')
-  const [nameError,    setNameError]  = useState('')
   const [clientSecret, setClientSecret] = useState<string | null>(null)
   const [piError,      setPiError]    = useState('')
 
@@ -225,8 +224,6 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const goNext = () => {
-    if (step === 1 && !ownerName.trim()) { setNameError('Your name is required.'); return }
-    setNameError('')
     setStep(s => s + 1)
   }
   const goBack = () => setStep(s => s - 1)
@@ -262,10 +259,10 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
             </div>
             <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#111827', margin: '2px 0 0' }}>
               {cell
-                ? 'This space is taken'
+                ? 'This cell is taken'
                 : step === 1 ? 'Leave your mark'
-                : step === 2 ? 'Preview your cell'
-                : 'Secure your spot'}
+                : step === 2 ? 'One last look'
+                : 'Place your mark'}
             </h2>
           </div>
           <button onClick={onClose} style={{
@@ -287,7 +284,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                   background: cell.bgColor || '#e2e8f0', border: '2px solid #e2e8f0', flexShrink: 0,
                 }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#111827' }}>{cell.ownerName}</div>
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#111827' }}>{cell.ownerName || 'Anonymous'}</div>
                   <div style={{ fontSize: '12px', color: '#9ca3af' }}>
                     {new Date(cell.claimedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
                   </div>
@@ -364,15 +361,17 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                   {/* Right: form */}
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '13px', minWidth: 0 }}>
                     <div>
-                      <label style={lbl}>Your name *</label>
+                      <label style={lbl}>
+                        Your name{' '}
+                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+                      </label>
                       <input
                         value={ownerName}
-                        onChange={e => { setOwnerName(e.target.value); setNameError('') }}
-                        placeholder="What should we call you?"
+                        onChange={e => setOwnerName(e.target.value)}
+                        placeholder="Anonymous"
                         maxLength={40} autoFocus
-                        style={{ ...inp, borderColor: nameError ? '#f87171' : '#e2e8f0' }}
+                        style={inp}
                       />
-                      {nameError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{nameError}</div>}
                     </div>
 
                     <div>
@@ -430,14 +429,14 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                       <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={300} />
                       <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>
-                        exactly what the world will see
+                        exactly what it will look like, forever
                       </div>
                     </div>
                   </div>
 
                   {/* Summary */}
                   <div style={{ background: '#f9fafb', borderRadius: '12px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                    <div style={{ fontSize: '12px', color: '#374151' }}><strong>Name:</strong> {ownerName}</div>
+                    <div style={{ fontSize: '12px', color: '#374151' }}><strong>Name:</strong> {ownerName || 'Anonymous'}</div>
                     {contentText && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Message:</strong> {contentText}</div>}
                     {contact && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Link:</strong> {contact}</div>}
                     {imageUrl && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Image:</strong> ✓</div>}
@@ -462,7 +461,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       ...btnPrimary, flex: 1,
                       background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     }}>
-                      Looks good · Pay $1 →
+                      Place it · $1 →
                     </button>
                   </div>
                 </div>

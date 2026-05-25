@@ -1,12 +1,10 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { GridCanvas } from './components/GridCanvas'
+import { GridCanvas, COLS, ROWS } from './components/GridCanvas'
 import { ClaimModal } from './components/ClaimModal'
+import { IntroOverlay, shouldShowIntro } from './components/IntroOverlay'
 import { supabase } from './lib/supabase'
 import { rowToCell } from './types'
 import type { CellData } from './types'
-
-const COLS = 100
-const ROWS = 100
 
 // ── Search result type ────────────────────────────────────────────────────────
 interface SearchResult {
@@ -63,27 +61,26 @@ function SearchBox({ cells, onNavigate, onOpen }: {
     const found: SearchResult[] = []
 
     if (isNum) {
-      // Match by cell number
       const n = parseInt(q)
       for (const cell of cells.values()) {
         const num = cell.row * COLS + cell.col + 1
         if (String(num).startsWith(q)) {
-          found.push({ cell, row: cell.row, col: cell.col, cellNum: num, label: cell.ownerName })
+          found.push({ cell, row: cell.row, col: cell.col, cellNum: num, label: cell.ownerName || 'Anonymous' })
           if (found.length >= 8) break
         }
       }
-      // Also offer navigating to any valid cell number (even unclaimed)
+      // Also allow navigating directly to any valid cell number (even unclaimed)
       if (n >= 1 && n <= ROWS * COLS && !found.find(r => r.cellNum === n)) {
         const row = Math.floor((n - 1) / COLS)
         const col = (n - 1) % COLS
-        found.unshift({ cell: null, row, col, cellNum: n, label: 'unclaimed' })
+        found.unshift({ cell: null, row, col, cellNum: n, label: 'empty' })
       }
     } else {
-      // Match by owner name
       const ql = q.toLowerCase()
       for (const cell of cells.values()) {
-        if (cell.ownerName.toLowerCase().includes(ql)) {
-          found.push({ cell, row: cell.row, col: cell.col, cellNum: cell.row * COLS + cell.col + 1, label: cell.ownerName })
+        const name = cell.ownerName || 'Anonymous'
+        if (name.toLowerCase().includes(ql) || cell.contentText.toLowerCase().includes(ql)) {
+          found.push({ cell, row: cell.row, col: cell.col, cellNum: cell.row * COLS + cell.col + 1, label: name })
           if (found.length >= 8) break
         }
       }
@@ -103,7 +100,11 @@ function SearchBox({ cells, onNavigate, onOpen }: {
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.9)', border: '1.5px solid rgba(0,0,0,0.12)', borderRadius: '8px', padding: '6px 10px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '6px',
+        background: 'rgba(255,255,255,0.9)', border: '1.5px solid rgba(0,0,0,0.12)',
+        borderRadius: '8px', padding: '6px 10px',
+      }}>
         <svg width="13" height="13" viewBox="0 0 20 20" fill="none" style={{ flexShrink: 0, opacity: 0.4 }}>
           <circle cx="9" cy="9" r="6" stroke="#111" strokeWidth="2"/>
           <path d="M13.5 13.5L17 17" stroke="#111" strokeWidth="2" strokeLinecap="round"/>
@@ -121,7 +122,6 @@ function SearchBox({ cells, onNavigate, onOpen }: {
         />
       </div>
 
-      {/* Dropdown */}
       {showDropdown && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 6px)', right: 0,
@@ -149,7 +149,9 @@ function SearchBox({ cells, onNavigate, onOpen }: {
               }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {r.cell ? r.label : <span style={{ color: '#9ca3af', fontWeight: 400 }}>Cell #{r.cellNum} — unclaimed</span>}
+                  {r.cell
+                    ? r.label
+                    : <span style={{ color: '#9ca3af', fontWeight: 400 }}>Cell #{r.cellNum} — empty</span>}
                 </div>
                 {r.cell?.contentText && (
                   <div style={{ fontSize: '11px', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -171,6 +173,7 @@ export function App() {
   const [cells, setCells] = useState<Map<string, CellData>>(new Map())
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState<{ row: number; col: number; cell: CellData | null } | null>(null)
+  const [showIntro, setShowIntro] = useState(shouldShowIntro)
   const goToCellRef = useRef<((row: number, col: number) => void) | null>(null)
 
   useEffect(() => {
@@ -215,8 +218,12 @@ export function App() {
 
       {/* Loading overlay */}
       {loading && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#eef0f5', zIndex: 50 }}>
-          <div style={{ fontSize: '13px', color: '#6b7280', fontWeight: 500 }}>loading the grid…</div>
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          background: '#eef0f5', zIndex: 50,
+        }}>
+          <div style={{ fontSize: '13px', color: '#6b7280', fontWeight: 500 }}>loading…</div>
         </div>
       )}
 
@@ -227,37 +234,30 @@ export function App() {
         padding: '12px 14px', pointerEvents: 'none',
       }}>
         {/* Logo + title */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', pointerEvents: 'none' }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', pointerEvents: 'all', cursor: 'pointer' }}
+          onClick={() => setShowIntro(true)}
+          title="What is this?"
+        >
           <img src="/logo.svg" alt="The Grid" width={32} height={32} style={{ borderRadius: '6px' }} />
           <div>
             <div style={{ fontSize: '15px', fontWeight: 800, color: '#111827', letterSpacing: '-0.02em', lineHeight: 1 }}>
               The Grid
             </div>
             <div style={{ fontSize: '11px', color: 'rgba(0,0,0,0.38)', marginTop: '2px' }}>
-              pinch to zoom · drag to pan · click to claim
+              one million cells · $1 each
             </div>
           </div>
         </div>
 
         {/* Search */}
         <div style={{ pointerEvents: 'all' }}>
-          <SearchBox
-            cells={cells}
-            onNavigate={handleNavigate}
-            onOpen={handleCellClick}
-          />
+          <SearchBox cells={cells} onNavigate={handleNavigate} onOpen={handleCellClick} />
         </div>
       </div>
 
-      {/* Stats — bottom right */}
-      <div style={{
-        position: 'absolute', bottom: 14, right: 14,
-        fontSize: '11px', color: 'rgba(0,0,0,0.35)',
-        pointerEvents: 'none', userSelect: 'none', textAlign: 'right',
-      }}>
-        <span style={{ color: '#16a34a', fontWeight: 700 }}>{cells.size.toLocaleString()}</span>
-        {' / 1,000,000 claimed'}
-      </div>
+      {/* Intro overlay */}
+      {showIntro && <IntroOverlay onDone={() => setShowIntro(false)} />}
 
       {modal && (
         <ClaimModal
