@@ -245,7 +245,7 @@ export function App() {
               The Grid
             </div>
             <div style={{ fontSize: '11px', color: 'rgba(0,0,0,0.38)', marginTop: '2px' }}>
-              one million cells · $1 each
+              $1 to lock a cell forever
             </div>
           </div>
         </div>
