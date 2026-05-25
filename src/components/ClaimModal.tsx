@@ -1,13 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { loadStripe } from '@stripe/stripe-js'
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import type { CellData } from '../types'
 import { rowToCell } from '../types'
 import { drawCell } from '../lib/renderCell'
 import type { ImgCache } from '../lib/renderCell'
 import { COLS } from './GridCanvas'
-
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
 
 const PREVIEW_SIZE = 260  // canvas side length in CSS/device-independent px
 
@@ -120,93 +116,6 @@ function CellCanvas({
   )
 }
 
-// ── Stripe payment form ────────────────────────────────────────────────────────
-function PaymentForm({ row, col, formData, onSuccess, onBack }: {
-  row: number
-  col: number
-  formData: { ownerName: string; contentText: string; imageUrl: string; contact: string; bgColor: string }
-  onSuccess: (cell: CellData) => void
-  onBack: () => void
-}) {
-  const stripe = useStripe()
-  const elements = useElements()
-  const [paying, setPaying] = useState(false)
-  const [error, setError] = useState('')
-
-  const handlePay = async () => {
-    if (!stripe || !elements) return
-    setPaying(true)
-    setError('')
-
-    const { error: stripeError, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      redirect: 'if_required',
-    })
-
-    if (stripeError) {
-      setError(stripeError.message ?? 'Payment failed. Please try again.')
-      setPaying(false)
-      return
-    }
-
-    if (paymentIntent?.status !== 'succeeded') {
-      setError('Payment incomplete. Please try again.')
-      setPaying(false)
-      return
-    }
-
-    try {
-      const res = await fetch('/api/confirm-cell', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paymentIntentId: paymentIntent.id }),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Failed to claim cell')
-
-      const cell = rowToCell({
-        id: `${row}:${col}`,
-        row_idx: row, col_idx: col,
-        owner_name:   formData.ownerName,
-        content_text: formData.contentText,
-        image_url:    formData.imageUrl,
-        contact:      formData.contact,
-        bg_color:     formData.bgColor,
-        claimed_at:   new Date().toISOString(),
-      })
-      onSuccess(cell)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong.')
-      setPaying(false)
-    }
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <PaymentElement options={{ layout: { type: 'tabs', defaultCollapsed: false } }} />
-      {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: '#dc2626' }}>
-          {error}
-        </div>
-      )}
-      <div style={{ display: 'flex', gap: '10px' }}>
-        <button onClick={onBack} disabled={paying} style={btnSecondary}>← Back</button>
-        <button
-          onClick={handlePay}
-          disabled={paying || !stripe || !elements}
-          style={{
-            ...btnPrimary, flex: 1,
-            background: paying ? '#9ca3af' : 'linear-gradient(135deg, #16a34a, #15803d)',
-            cursor: paying ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {paying ? 'Processing…' : 'Pay $1 · place my mark'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 // ── Main modal ────────────────────────────────────────────────────────────────
 export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const [step, setStep]               = useState(1)
@@ -215,33 +124,31 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const [bgColor,      setBgColor]    = useState('#ffffff')
   const [imageUrl,     setImageUrl]   = useState('')
   const [contact,      setContact]    = useState('')
-  const [clientSecret, setClientSecret] = useState<string | null>(null)
-  const [piError,      setPiError]    = useState('')
   const [couponInput,  setCouponInput]  = useState('')
   const [couponError,  setCouponError]  = useState('')
   const [couponBusy,   setCouponBusy]   = useState(false)
 
   const cellNum = row * COLS + col + 1
 
-  // Create PaymentIntent when step 3 opens
-  useEffect(() => {
-    if (step !== 3 || clientSecret) return
-    setPiError('')
-    fetch('/api/create-payment-intent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ row, col, ownerName, contentText, imageUrl, contact, bgColor }),
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error)
-        setClientSecret(data.clientSecret)
-      })
-      .catch(err => {
-        setPiError(err.message ?? 'Could not initialise payment. Try again.')
-        setStep(2)
-      })
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+  // PaymentIntent creation — disabled in beta (coupon-only mode)
+  // useEffect(() => {
+  //   if (step !== 3 || clientSecret) return
+  //   setPiError('')
+  //   fetch('/api/create-payment-intent', {
+  //     method: 'POST',
+  //     headers: { 'Content-Type': 'application/json' },
+  //     body: JSON.stringify({ row, col, ownerName, contentText, imageUrl, contact, bgColor }),
+  //   })
+  //     .then(r => r.json())
+  //     .then(data => {
+  //       if (data.error) throw new Error(data.error)
+  //       setClientSecret(data.clientSecret)
+  //     })
+  //     .catch(err => {
+  //       setPiError(err.message ?? 'Could not initialise payment. Try again.')
+  //       setStep(2)
+  //     })
+  // }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCouponClaim = async () => {
     const code = couponInput.trim()
@@ -307,7 +214,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                 ? 'This cell is taken'
                 : step === 1 ? 'Leave your mark'
                 : step === 2 ? 'One last look'
-                : 'Place your mark'}
+                : `Lock cell #${cellNum.toLocaleString()}`}
             </h2>
           </div>
           <button onClick={onClose} style={{
@@ -543,12 +450,8 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                     borderRadius: '12px', padding: '14px 16px',
                     fontSize: '13px', color: '#92400e', lineHeight: 1.55,
                   }}>
-                    ⚠️ <strong>This is permanent.</strong> Once placed, your mark cannot be edited or removed — even by us. Think of it as a brushstroke on a shared canvas.
+                    ⚠️ <strong>This is permanent.</strong> Once locked, this cell cannot be edited or removed — not even by us.
                   </div>
-
-                  {piError && (
-                    <div style={{ color: '#dc2626', fontSize: '13px' }}>{piError}</div>
-                  )}
 
                   <div style={{ display: 'flex', gap: '10px' }}>
                     <button onClick={goBack} style={btnSecondary}>← Edit</button>
@@ -556,91 +459,57 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                       ...btnPrimary, flex: 1,
                       background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     }}>
-                      Lock the cell · $1 →
+                      Enter beta code →
                     </button>
                   </div>
                 </div>
               )}
 
               {/* ────────────────────────────────────────────────────────────
-                  Step 3 — Payment
+                  Step 3 — Beta code
               ──────────────────────────────────────────────────────────── */}
               {step === 3 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-                  {/* Stripe payment */}
-                  {!clientSecret ? (
-                    <div style={{ textAlign: 'center', padding: '48px 0', color: '#6b7280', fontSize: '14px' }}>
-                      Preparing payment…
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Beta info box */}
+                  <div style={{
+                    background: '#f0fdf4', border: '1px solid #86efac',
+                    borderRadius: '12px', padding: '14px 16px',
+                    fontSize: '13px', color: '#166534', lineHeight: 1.6,
+                  }}>
+                    <strong>The Grid is currently in beta</strong> — the first 1,000 cells are free. After that, cells will be $1 each. Enter the beta code below to lock yours.
+                  </div>
+
+                  {/* Coupon input */}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      value={couponInput}
+                      onChange={e => { setCouponInput(e.target.value); setCouponError('') }}
+                      onKeyDown={e => e.key === 'Enter' && handleCouponClaim()}
+                      placeholder="Beta code"
+                      disabled={couponBusy}
+                      autoFocus
+                      style={{ ...inp, flex: 1 }}
+                    />
+                    <button
+                      onClick={handleCouponClaim}
+                      disabled={couponBusy || !couponInput.trim()}
+                      style={{
+                        ...btnPrimary, width: 'auto', padding: '9px 16px',
+                        background: couponBusy ? '#9ca3af' : 'linear-gradient(135deg, #16a34a, #15803d)',
+                        cursor: couponBusy ? 'not-allowed' : 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {couponBusy ? '…' : 'Lock my cell →'}
+                    </button>
+                  </div>
+                  {couponError && (
+                    <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
+                      {couponError}
                     </div>
-                  ) : (
-                    <Elements stripe={stripePromise} options={{
-                      clientSecret,
-                      fonts: [{ cssSrc: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap' }],
-                      appearance: {
-                        theme: 'stripe',
-                        variables: {
-                          fontFamily: '"JetBrains Mono", monospace',
-                          fontSizeBase: '13px',
-                          colorPrimary: '#111827',
-                          colorBackground: '#f9fafb',
-                          borderRadius: '7px',
-                          spacingUnit: '4px',
-                          spacingGridRow: '12px',
-                        },
-                        rules: {
-                          '.Input': { padding: '8px 10px', border: '1.5px solid #e2e8f0' },
-                          '.Input:focus': { border: '1.5px solid #111827', boxShadow: 'none' },
-                          '.Tab': { padding: '8px 12px', fontSize: '12px' },
-                          '.TabLabel': { fontWeight: '600' },
-                        },
-                      },
-                    }}>
-                      <PaymentForm
-                        row={row} col={col}
-                        formData={{ ownerName, contentText, imageUrl, contact, bgColor }}
-                        onSuccess={onClaimed}
-                        onBack={goBack}
-                      />
-                    </Elements>
                   )}
 
-                  {/* ── Coupon code alternative ── */}
-                  <div style={{
-                    borderTop: '1px solid #f3f4f6',
-                    marginTop: '20px', paddingTop: '16px',
-                    display: 'flex', flexDirection: 'column', gap: '8px',
-                  }}>
-                    <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center', letterSpacing: '0.04em' }}>
-                      — or use a coupon code —
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input
-                        value={couponInput}
-                        onChange={e => { setCouponInput(e.target.value); setCouponError('') }}
-                        onKeyDown={e => e.key === 'Enter' && handleCouponClaim()}
-                        placeholder="Coupon code"
-                        disabled={couponBusy}
-                        style={{ ...inp, flex: 1 }}
-                      />
-                      <button
-                        onClick={handleCouponClaim}
-                        disabled={couponBusy || !couponInput.trim()}
-                        style={{
-                          ...btnPrimary, width: 'auto', padding: '9px 16px',
-                          background: couponBusy ? '#9ca3af' : '#111827',
-                          cursor: couponBusy ? 'not-allowed' : 'pointer',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {couponBusy ? '…' : 'Claim →'}
-                      </button>
-                    </div>
-                    {couponError && (
-                      <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
-                        {couponError}
-                      </div>
-                    )}
-                  </div>
+                  <button onClick={goBack} style={btnSecondary}>← Back</button>
                 </div>
               )}
             </>
