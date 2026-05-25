@@ -193,6 +193,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const wide = window.innerWidth >= 640
 
   return (
+    <>
     <div onClick={handleBackdrop} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -527,6 +528,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
     </div>
 
     {/* ── Discard confirmation ── */}
+
     {confirmClose && (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 110,
@@ -558,5 +560,6 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
         </div>
       </div>
     )}
+    </>
   )
 }
