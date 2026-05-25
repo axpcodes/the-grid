@@ -127,6 +127,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
   const [couponInput,  setCouponInput]  = useState('')
   const [couponError,  setCouponError]  = useState('')
   const [couponBusy,   setCouponBusy]   = useState(false)
+  const [confirmClose, setConfirmClose] = useState(false)
 
   const cellNum = row * COLS + col + 1
 
@@ -175,11 +176,18 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
     }
   }
 
+  const isDirty = !!(ownerName || contentText || imageUrl || contact || bgColor !== '#ffffff')
+
+  const handleTryClose = () => {
+    if (isDirty) setConfirmClose(true)
+    else onClose()
+  }
+
   const goNext = () => {
     setStep(s => s + 1)
   }
   const goBack = () => setStep(s => s - 1)
-  const handleBackdrop = (e: React.MouseEvent) => { if (e.target === e.currentTarget) onClose() }
+  const handleBackdrop = (e: React.MouseEvent) => { if (e.target === e.currentTarget) handleTryClose() }
 
   // Two-column layout when viewport is wide enough
   const wide = window.innerWidth >= 640
@@ -217,7 +225,7 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
                 : `Lock cell #${cellNum.toLocaleString()}`}
             </h2>
           </div>
-          <button onClick={onClose} style={{
+          <button onClick={cell ? onClose : handleTryClose} style={{
             background: '#f3f4f6', border: 'none', borderRadius: '50%',
             width: '34px', height: '34px', cursor: 'pointer', fontSize: '20px', lineHeight: 1,
             color: '#6b7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -517,5 +525,38 @@ export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
         </div>
       </div>
     </div>
+
+    {/* ── Discard confirmation ── */}
+    {confirmClose && (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 110,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.5)', padding: '16px',
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: '16px', padding: '24px',
+          maxWidth: '320px', width: '100%',
+          boxShadow: '0 16px 48px rgba(0,0,0,0.25)',
+        }}>
+          <div style={{ fontSize: '16px', fontWeight: 800, color: '#111827', marginBottom: '6px' }}>
+            Discard changes?
+          </div>
+          <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '20px', lineHeight: 1.5 }}>
+            You'll lose everything you've entered so far.
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => setConfirmClose(false)} style={{ ...btnSecondary, flex: 1 }}>
+              Keep editing
+            </button>
+            <button
+              onClick={onClose}
+              style={{ ...btnPrimary, flex: 1, background: '#ef4444' }}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
   )
 }

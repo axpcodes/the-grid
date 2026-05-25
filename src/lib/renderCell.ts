@@ -24,20 +24,24 @@ export interface DrawCellOpts {
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const words = text.split(' ')
   const lines: string[] = []
-  let cur = ''
-  for (const word of words) {
-    const test = cur ? `${cur} ${word}` : word
-    if (ctx.measureText(test).width > maxW && cur) {
-      lines.push(cur)
-      cur = word
-    } else {
-      cur = test
+  // Respect explicit newlines (paragraph breaks) first
+  for (const para of text.split('\n')) {
+    if (!para) { lines.push(''); continue }
+    const words = para.split(' ')
+    let cur = ''
+    for (const word of words) {
+      const test = cur ? `${cur} ${word}` : word
+      if (ctx.measureText(test).width > maxW && cur) {
+        lines.push(cur)
+        cur = word
+      } else {
+        cur = test
+      }
     }
+    lines.push(cur)
   }
-  if (cur) lines.push(cur)
-  return lines.length ? lines : [text]
+  return lines.length ? lines : ['']
 }
 
 export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
@@ -69,13 +73,17 @@ export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
 
   // ── text (fully in screen-space — scales perfectly with zoom) ────────────────
   if (contentText && size > 4) {
-    const pad  = size * 0.06
-    const S    = size - pad * 2   // usable square in screen px
+    const pad = size * 0.06
+    const S   = size - pad * 2   // usable square in screen px
 
-    // Font size that fills a square block for this text length
-    const N         = contentText.length
-    const squareFit = S / Math.sqrt(N * CHAR_W_RATIO * LINE_H_RATIO)
-    const fontSize  = Math.min(size * 0.18, Math.max(size * 0.04, squareFit))
+    const N = contentText.length
+
+    // squareFit: makes short text big and prominent (fills the cell nicely)
+    const squareFit  = S / Math.sqrt(N * CHAR_W_RATIO * LINE_H_RATIO)
+    // naturalSize: floor that targets ~32 chars/line — prevents text from becoming
+    // an unreadable micro-block for long content; text clips at the bottom instead
+    const naturalSize = S / (32 * CHAR_W_RATIO)
+    const fontSize   = Math.min(size * 0.18, Math.max(size * 0.03, squareFit, naturalSize))
 
     ctx.save()
     ctx.beginPath()
@@ -85,23 +93,32 @@ export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
     ctx.font = `${fontSize}px ${FONT}`
     const lines      = wrapText(ctx, contentText, S)
     const lineHeight = fontSize * LINE_H_RATIO
-    const totalH     = lines.length * lineHeight
-    const maxLineW   = Math.max(...lines.map(l => ctx.measureText(l).width))
 
-    // Safety scale-down if still overflows
-    const scale   = Math.min(1, S / totalH, S / maxLineW)
-    const ffs     = fontSize * scale
-    const flh     = lineHeight * scale
+    // Only scale to prevent horizontal overflow; vertical overflow is fine — the
+    // clip rect handles it, and users can zoom in to read more of the cell
+    const maxLineW = Math.max(...lines.map(l => ctx.measureText(l).width))
+    const scale    = Math.min(1, S / maxLineW)
+    const ffs      = fontSize * scale
+    const flh      = lineHeight * scale
 
-    ctx.font           = `${ffs}px ${FONT}`
-    ctx.fillStyle      = 'rgba(0,0,0,0.82)'
-    ctx.textAlign      = 'center'
-    ctx.textBaseline   = 'middle'
+    ctx.font         = `${ffs}px ${FONT}`
+    ctx.fillStyle    = 'rgba(0,0,0,0.82)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
 
     const cx     = x + size / 2
-    const cy     = y + size / 2
-    const startY = cy - ((lines.length - 1) / 2) * flh
-    lines.forEach((line, i) => ctx.fillText(line, cx, startY + i * flh))
+    const totalH = lines.length * flh
+    // Center vertically when text fits; top-align when it overflows so the
+    // beginning of the text is always visible
+    const startY = totalH <= S
+      ? y + size / 2 - totalH / 2 + ffs / 2
+      : y + pad + ffs / 2
+
+    lines.forEach((line, i) => {
+      const lineY = startY + i * flh
+      if (lineY - flh > y + size) return  // skip fully off-screen lines
+      ctx.fillText(line, cx, lineY)
+    })
 
     ctx.restore()
   }
