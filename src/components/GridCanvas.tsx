@@ -11,8 +11,11 @@ const MAX_ZOOM = 8
 
 interface Props {
   cells: Map<string, CellData>
-  onCellClick: (row: number, col: number, data: CellData | null) => void
+  /** cellPx = current cell size in screen pixels; sx/sy = click position in client coords */
+  onCellClick: (row: number, col: number, data: CellData | null, cellPx: number, sx: number, sy: number) => void
   goToCellRef?: React.MutableRefObject<((row: number, col: number) => void) | null>
+  /** Zooms in to 1:1 (cells at 64 px) centered on the given cell */
+  zoomToCellRef?: React.MutableRefObject<((row: number, col: number) => void) | null>
 }
 
 // ── Desktop zoom controls ─────────────────────────────────────────────────────
@@ -41,7 +44,7 @@ function CtrlBtn({
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
+export function GridCanvas({ cells, onCellClick, goToCellRef, zoomToCellRef }: Props) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
   const cellsRef   = useRef(cells)
   const onClickRef = useRef(onCellClick)
@@ -266,7 +269,7 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
         // Clean click — open the cell modal
         const rect = canvas.getBoundingClientRect()
         const hit = screenToCell(e.clientX - rect.left, e.clientY - rect.top)
-        if (hit) onClickRef.current(hit.row, hit.col, getCell(hit.row, hit.col))
+        if (hit) onClickRef.current(hit.row, hit.col, getCell(hit.row, hit.col), CELL_SIZE * zoom, e.clientX, e.clientY)
       }
       zoomBox    = null
       isDragging = false
@@ -351,10 +354,10 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
       // Fire click only if the entire gesture was a clean single tap
       if (maxTouches === 1 && !didDrag && e.touches.length === 0) {
         const rect = canvas.getBoundingClientRect()
-        const sx = e.changedTouches[0].clientX - rect.left
-        const sy = e.changedTouches[0].clientY - rect.top
-        const hit = screenToCell(sx, sy)
-        if (hit) onClickRef.current(hit.row, hit.col, getCell(hit.row, hit.col))
+        const tx = e.changedTouches[0].clientX
+        const ty = e.changedTouches[0].clientY
+        const hit = screenToCell(tx - rect.left, ty - rect.top)
+        if (hit) onClickRef.current(hit.row, hit.col, getCell(hit.row, hit.col), CELL_SIZE * zoom, tx, ty)
       }
 
       if (e.touches.length === 0) {
@@ -364,12 +367,25 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
       }
     }
 
-    // ── go-to-cell (called from App) ───────────────────────────────────────
+    // ── go-to-cell (pan only, called from search) ─────────────────────────
     if (goToCellRef) {
       goToCellRef.current = (row: number, col: number) => {
         const cellW = CELL_SIZE * zoom
         panX = canvas.width  / 2 - (col + 0.5) * cellW
         panY = canvas.height / 2 - (row + 0.5) * cellW
+        draw()
+      }
+    }
+
+    // ── zoom-to-cell (pan + zoom to 1:1, called from zoom-or-claim popup) ─
+    if (zoomToCellRef) {
+      zoomToCellRef.current = (row: number, col: number) => {
+        // Target: cells at 64px (zoom = 1.0), or keep current if already larger
+        const targetZoom = Math.min(MAX_ZOOM, Math.max(zoom, 1.0))  // at least 1.0 (cells at 64px)
+        const cellW = CELL_SIZE * targetZoom
+        panX = canvas.width  / 2 - (col + 0.5) * cellW
+        panY = canvas.height / 2 - (row + 0.5) * cellW
+        zoom = targetZoom
         draw()
       }
     }
@@ -389,7 +405,8 @@ export function GridCanvas({ cells, onCellClick, goToCellRef }: Props) {
       zoomInRef.current  = () => {}
       zoomOutRef.current = () => {}
       homeRef.current    = () => {}
-      if (goToCellRef) goToCellRef.current = null
+      if (goToCellRef)   goToCellRef.current   = null
+      if (zoomToCellRef) zoomToCellRef.current = null
       canvas.removeEventListener('mousedown',  onMouseDown)
       canvas.removeEventListener('mousemove',  onMouseMove)
       canvas.removeEventListener('mouseup',    onMouseUp)

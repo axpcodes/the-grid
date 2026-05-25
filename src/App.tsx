@@ -6,6 +6,82 @@ import { supabase } from './lib/supabase'
 import { rowToCell } from './types'
 import type { CellData } from './types'
 
+// Cells must be at least this many px wide before we skip the "zoom or claim" prompt
+const VISIBLE_PX_THRESHOLD = 20
+
+// ── Zoom-or-claim popup ───────────────────────────────────────────────────────
+interface ZoomPrompt {
+  row: number; col: number; cell: CellData | null
+  x: number; y: number   // client coords of the click
+}
+
+function ZoomOrClaimPopup({
+  prompt, onZoom, onOpen, onDismiss,
+}: {
+  prompt: ZoomPrompt
+  onZoom: () => void
+  onOpen: () => void
+  onDismiss: () => void
+}) {
+  const { row, col, cell, x, y } = prompt
+  const cellNum = row * COLS + col + 1
+
+  // Keep popup in viewport
+  const W = 210, H = 96
+  const left = Math.max(8, Math.min(window.innerWidth  - W - 8, x - W / 2))
+  const top  = y - H - 16 < 8
+    ? y + 16      // not enough room above → appear below
+    : y - H - 16  // appear above the click point
+
+  return (
+    <>
+      {/* Invisible backdrop to dismiss */}
+      <div
+        onClick={onDismiss}
+        style={{ position: 'fixed', inset: 0, zIndex: 90 }}
+      />
+      <div style={{
+        position: 'fixed', left, top, width: W, zIndex: 91,
+        background: '#fff', borderRadius: '12px',
+        border: '1.5px solid #e2e8f0',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+        padding: '12px 12px 10px',
+      }}>
+        <div style={{
+          fontSize: '11px', fontWeight: 700, color: '#6b7280',
+          textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '10px',
+        }}>
+          Cell #{cellNum.toLocaleString()}{cell ? ' · claimed' : ''}
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => { onZoom(); onDismiss() }}
+            style={{
+              flex: 1, padding: '8px 0', borderRadius: '8px',
+              border: '1.5px solid #e2e8f0', background: '#f9fafb',
+              cursor: 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'inherit',
+              color: '#374151',
+            }}
+          >
+            🔍 Zoom here
+          </button>
+          <button
+            onClick={() => { onOpen(); onDismiss() }}
+            style={{
+              flex: 1, padding: '8px 0', borderRadius: '8px', border: 'none',
+              background: cell ? '#6b7280' : '#3b82f6',
+              color: '#fff', cursor: 'pointer',
+              fontSize: '12px', fontWeight: 600, fontFamily: 'inherit',
+            }}
+          >
+            {cell ? 'View' : 'Claim'}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Search result type ────────────────────────────────────────────────────────
 interface SearchResult {
   cell: CellData | null
@@ -26,7 +102,6 @@ function SearchBox({ cells, onNavigate, onOpen }: {
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Ctrl/Cmd+F → focus search, override browser find
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -43,12 +118,9 @@ function SearchBox({ cells, onNavigate, onOpen }: {
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setFocused(false)
-      }
+      if (!containerRef.current?.contains(e.target as Node)) setFocused(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -69,7 +141,6 @@ function SearchBox({ cells, onNavigate, onOpen }: {
           if (found.length >= 8) break
         }
       }
-      // Also allow navigating directly to any valid cell number (even unclaimed)
       if (n >= 1 && n <= ROWS * COLS && !found.find(r => r.cellNum === n)) {
         const row = Math.floor((n - 1) / COLS)
         const col = (n - 1) % COLS
@@ -91,9 +162,7 @@ function SearchBox({ cells, onNavigate, onOpen }: {
   const handleSelect = (r: SearchResult) => {
     onNavigate(r.row, r.col)
     onOpen(r.row, r.col, r.cell)
-    setQuery('')
-    setFocused(false)
-    inputRef.current?.blur()
+    setQuery(''); setFocused(false); inputRef.current?.blur()
   }
 
   const showDropdown = focused && query.trim().length > 0
@@ -144,14 +213,11 @@ function SearchBox({ cells, onNavigate, onOpen }: {
             >
               <div style={{
                 width: '20px', height: '20px', borderRadius: '4px', flexShrink: 0,
-                background: r.cell?.bgColor ?? '#e5e7eb',
-                border: '1px solid rgba(0,0,0,0.08)',
+                background: r.cell?.bgColor ?? '#e5e7eb', border: '1px solid rgba(0,0,0,0.08)',
               }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {r.cell
-                    ? r.label
-                    : <span style={{ color: '#9ca3af', fontWeight: 400 }}>Cell #{r.cellNum} — empty</span>}
+                  {r.cell ? r.label : <span style={{ color: '#9ca3af', fontWeight: 400 }}>Cell #{r.cellNum} — empty</span>}
                 </div>
                 {r.cell?.contentText && (
                   <div style={{ fontSize: '11px', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -170,11 +236,13 @@ function SearchBox({ cells, onNavigate, onOpen }: {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export function App() {
-  const [cells, setCells] = useState<Map<string, CellData>>(new Map())
-  const [loading, setLoading] = useState(true)
-  const [modal, setModal] = useState<{ row: number; col: number; cell: CellData | null } | null>(null)
+  const [cells, setCells]         = useState<Map<string, CellData>>(new Map())
+  const [loading, setLoading]     = useState(true)
+  const [modal, setModal]         = useState<{ row: number; col: number; cell: CellData | null } | null>(null)
+  const [zoomPrompt, setZoomPrompt] = useState<ZoomPrompt | null>(null)
   const [showIntro, setShowIntro] = useState(shouldShowIntro)
-  const goToCellRef = useRef<((row: number, col: number) => void) | null>(null)
+  const goToCellRef   = useRef<((row: number, col: number) => void) | null>(null)
+  const zoomToCellRef = useRef<((row: number, col: number) => void) | null>(null)
 
   useEffect(() => {
     supabase
@@ -199,8 +267,16 @@ export function App() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  const handleCellClick = useCallback((row: number, col: number, cell: CellData | null) => {
-    setModal({ row, col, cell })
+  const handleCellClick = useCallback((
+    row: number, col: number, cell: CellData | null,
+    cellPx: number, sx: number, sy: number,
+  ) => {
+    // If cells are tiny (<20px), user might not know what they clicked — give them a choice
+    if (cellPx < VISIBLE_PX_THRESHOLD) {
+      setZoomPrompt({ row, col, cell, x: sx, y: sy })
+    } else {
+      setModal({ row, col, cell })
+    }
   }, [])
 
   const handleClaimed = useCallback((cell: CellData) => {
@@ -214,7 +290,12 @@ export function App() {
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#eef0f5' }}>
-      <GridCanvas cells={cells} onCellClick={handleCellClick} goToCellRef={goToCellRef} />
+      <GridCanvas
+        cells={cells}
+        onCellClick={handleCellClick}
+        goToCellRef={goToCellRef}
+        zoomToCellRef={zoomToCellRef}
+      />
 
       {/* Loading overlay */}
       {loading && (
@@ -233,7 +314,6 @@ export function App() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '12px 14px', pointerEvents: 'none',
       }}>
-        {/* Logo + title */}
         <div
           style={{ display: 'flex', alignItems: 'center', gap: '10px', pointerEvents: 'all', cursor: 'pointer' }}
           onClick={() => setShowIntro(true)}
@@ -250,14 +330,23 @@ export function App() {
           </div>
         </div>
 
-        {/* Search */}
         <div style={{ pointerEvents: 'all' }}>
-          <SearchBox cells={cells} onNavigate={handleNavigate} onOpen={handleCellClick} />
+          <SearchBox cells={cells} onNavigate={handleNavigate} onOpen={(r, c, cell) => setModal({ row: r, col: c, cell })} />
         </div>
       </div>
 
       {/* Intro overlay */}
       {showIntro && <IntroOverlay onDone={() => setShowIntro(false)} />}
+
+      {/* Zoom-or-claim popup */}
+      {zoomPrompt && (
+        <ZoomOrClaimPopup
+          prompt={zoomPrompt}
+          onZoom={() => zoomToCellRef.current?.(zoomPrompt.row, zoomPrompt.col)}
+          onOpen={() => setModal({ row: zoomPrompt.row, col: zoomPrompt.col, cell: zoomPrompt.cell })}
+          onDismiss={() => setZoomPrompt(null)}
+        />
+      )}
 
       {modal && (
         <ClaimModal
