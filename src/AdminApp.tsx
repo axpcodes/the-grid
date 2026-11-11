@@ -62,6 +62,7 @@ function AdminPanel({ password }: { password: string }) {
 
   const load = useCallback(async () => {
     setLoading(true)
+    if (!supabase) { setLoading(false); return }
     const { data } = await supabase.from('cells').select('*').order('claimed_at', { ascending: false })
     setCells((data ?? []).map(r => rowToCell(r as Record<string, unknown>)))
     setLoading(false)

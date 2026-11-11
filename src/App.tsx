@@ -237,6 +237,7 @@ export function App() {
   // ── Load + live updates ────────────────────────────────────────────────────
   const load = useCallback(() => {
     setStatus('loading')
+    if (!supabase) { setStatus('error'); return }
     supabase.from('cells').select('*').then(({ data, error }) => {
       if (error) { console.error('Failed to load cells:', error); setStatus('error'); return }
       const map = new Map<string, CellData>()
@@ -248,7 +249,9 @@ export function App() {
 
   useEffect(() => {
     load()
-    const channel = supabase
+    const db = supabase
+    if (!db) return
+    const channel = db
       .channel('cells-live')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'cells' }, payload => {
         const cell = rowToCell(payload.new as Record<string, unknown>)
@@ -257,7 +260,7 @@ export function App() {
         apiRef.current?.pulse(cell.row, cell.col)
       })
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => { db.removeChannel(channel) }
   }, [load])
 
   // ── First camera placement: deep link → latest mark → middle of the wall ───
