@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { CellData } from '../types'
 import { rowToCell } from '../types'
 import { drawCell } from '../lib/renderCell'
 import type { ImgCache } from '../lib/renderCell'
 import { COLS } from './GridCanvas'
-
-const PREVIEW_SIZE = 260  // canvas side length in CSS/device-independent px
+import { Turnstile } from './Turnstile'
+import {
+  INK, INK_SOFT, INK_FAINT, SURFACE, LINE, ACCENT, SERIF,
+  btnPrimary, btnGhost, isTouch, cellNumber,
+} from '../lib/ui'
 
 interface Props {
   row: number
@@ -13,88 +17,76 @@ interface Props {
   cell: CellData | null
   onClose: () => void
   onClaimed: (cell: CellData) => void
+  onShare: (row: number, col: number) => void
+  onAbout: () => void
 }
 
-// ── Shared styles ──────────────────────────────────────────────────────────────
-const inp: React.CSSProperties = {
-  width: '100%', padding: '9px 12px',
-  border: '1.5px solid #e2e8f0', borderRadius: '8px',
-  fontSize: '14px', outline: 'none', background: '#fafafa',
-  boxSizing: 'border-box', fontFamily: 'inherit',
-}
-const lbl: React.CSSProperties = {
-  display: 'block', fontWeight: 700, fontSize: '11px',
-  marginBottom: '5px', color: '#374151',
-  textTransform: 'uppercase', letterSpacing: '0.07em',
-}
-const btnPrimary: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff',
-  border: 'none', borderRadius: '10px', padding: '12px 16px',
-  fontSize: '14px', fontWeight: 700, cursor: 'pointer', width: '100%', fontFamily: 'inherit',
-}
-const btnSecondary: React.CSSProperties = {
-  background: '#f3f4f6', color: '#374151', border: 'none',
-  borderRadius: '10px', padding: '12px 16px', fontSize: '14px',
-  fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+const SWATCHES = ['#ffffff', '#1a1714', '#f6e7b9', '#f3c9b8', '#cfe3d4', '#c9dbef', '#e2553b', '#2f4a7a']
+const MAX_TEXT = 3000
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 640)
+  useEffect(() => {
+    const on = () => setNarrow(window.innerWidth < 640)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return narrow
 }
 
-// ── Step progress bar ──────────────────────────────────────────────────────────
-function StepBar({ step, total }: { step: number; total: number }) {
-  return (
-    <div style={{ display: 'flex', gap: '5px', marginBottom: '24px' }}>
-      {Array.from({ length: total }, (_, i) => i + 1).map(n => (
-        <div key={n} style={{
-          height: '3px', flex: n === step ? 2 : 1, borderRadius: '2px',
-          background: n === step ? '#3b82f6' : n < step ? '#93c5fd' : '#e2e8f0',
-          transition: 'all 0.3s ease',
-        }} />
-      ))}
-    </div>
-  )
-}
-
-// ── Image resize helper (client-side, no storage needed) ─────────────────────
-function resizeImage(file: File, maxPx = 512, quality = 0.82): Promise<string> {
+/** Center-crop to a square and shrink to 512px — cells are square, never stretched. */
+function resizeImage(file: File, maxPx = 512): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {
       URL.revokeObjectURL(url)
-      const scale = Math.min(1, maxPx / Math.max(img.width, img.height))
-      const w = Math.round(img.width * scale)
-      const h = Math.round(img.height * scale)
+      const side = Math.min(img.naturalWidth, img.naturalHeight)
+      const out  = Math.min(maxPx, side)
       const canvas = document.createElement('canvas')
-      canvas.width = w; canvas.height = h
-      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
-      resolve(canvas.toDataURL('image/jpeg', quality))
+      canvas.width = canvas.height = out
+      canvas.getContext('2d')!.drawImage(
+        img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, out, out,
+      )
+      let data = canvas.toDataURL('image/jpeg', 0.84)
+      if (data.length > 260_000) data = canvas.toDataURL('image/jpeg', 0.7)
+      resolve(data)
     }
-    img.onerror = reject
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('unreadable')) }
     img.src = url
   })
 }
 
-// ── Canvas preview — pixel-identical to the grid at any zoom ──────────────────
-function CellCanvas({
-  bgColor, imageUrl, contentText, size = PREVIEW_SIZE,
-}: {
-  bgColor: string; imageUrl: string; contentText: string; size?: number
+function linkFor(contact: string): string | null {
+  const c = contact.trim()
+  if (/^https?:\/\//i.test(c)) return c
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c)) return `mailto:${c}`
+  if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(c)) return `https://${c}`
+  return null   // @handles and free text are shown, not linked
+}
+
+// ── Canvas preview — pixel-identical to the grid ─────────────────────────────
+function CellCanvas({ bgColor, imageUrl, contentText, size }: {
+  bgColor: string; imageUrl: string; contentText: string; size: number
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imgCacheRef = useRef<ImgCache>(new Map())
+  const ref = useRef<HTMLCanvasElement>(null)
+  const cache = useRef<ImgCache>(new Map())
 
   const redraw = useCallback(() => {
-    const canvas = canvasRef.current
+    const canvas = ref.current
     if (!canvas) return
+    const dpr = Math.min(window.devicePixelRatio || 1, 3)
+    canvas.width = canvas.height = Math.round(size * dpr)
     const ctx = canvas.getContext('2d')!
-    ctx.clearRect(0, 0, size, size)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     drawCell(ctx, {
       x: 0, y: 0, size,
       bgColor: bgColor || '#ffffff',
       contentText: contentText || undefined,
       imageUrl: imageUrl || undefined,
-      imgCache: imgCacheRef.current,
+      imgCache: cache.current,
       onImageLoad: redraw,
-      claimed: !!(contentText || imageUrl || bgColor !== '#ffffff'),
     })
   }, [bgColor, imageUrl, contentText, size])
 
@@ -102,464 +94,438 @@ function CellCanvas({
 
   return (
     <canvas
-      ref={canvasRef}
-      width={size}
-      height={size}
+      ref={ref}
       style={{
-        width: `${size}px`, height: `${size}px`,
-        borderRadius: '14px',
-        border: '2px solid rgba(0,0,0,0.08)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-        display: 'block',
+        width: size, height: size, display: 'block', borderRadius: 4,
+        boxShadow: '0 1px 0 rgba(60,45,25,0.08), 0 14px 40px rgba(60,45,25,0.18)',
       }}
     />
   )
 }
 
-// ── Main modal ────────────────────────────────────────────────────────────────
-export function ClaimModal({ row, col, cell, onClose, onClaimed }: Props) {
-  const [step, setStep]               = useState(1)
-  const [ownerName,    setOwnerName]  = useState('')
-  const [contentText,  setContentText] = useState('')
-  const [bgColor,      setBgColor]    = useState('#ffffff')
-  const [imageUrl,     setImageUrl]   = useState('')
-  const [contact,      setContact]    = useState('')
-  const [couponInput,  setCouponInput]  = useState('')
-  const [couponError,  setCouponError]  = useState('')
-  const [couponBusy,   setCouponBusy]   = useState(false)
+// ── Sheet: bottom sheet on phones, card on desktop ───────────────────────────
+function Sheet({ narrow, maxWidth, onBackdrop, header, footer, children }: {
+  narrow: boolean; maxWidth: number; onBackdrop: () => void
+  header: ReactNode; footer?: ReactNode; children: ReactNode
+}) {
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onBackdrop() }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(20,16,12,0.48)', animation: 'fade-in .18s ease both',
+        display: 'flex', justifyContent: 'center',
+        alignItems: narrow ? 'flex-end' : 'center',
+        padding: narrow ? 0 : 20,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          background: SURFACE, width: '100%', maxWidth,
+          maxHeight: narrow ? '94dvh' : '90dvh',
+          borderRadius: narrow ? '22px 22px 0 0' : 22,
+          boxShadow: '0 30px 80px rgba(20,16,12,0.35)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          animation: narrow ? 'sheet-up .32s cubic-bezier(.2,.9,.25,1) both' : 'pop-in .22s ease both',
+        }}
+      >
+        {narrow && <div style={{ width: 38, height: 4, borderRadius: 2, background: 'rgba(26,23,20,0.16)', margin: '9px auto 0' }} />}
+        {header}
+        <div style={{ overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '4px 22px 18px', flex: 1 }}>
+          {children}
+        </div>
+        {footer && (
+          <div style={{
+            padding: '12px 22px', paddingBottom: narrow ? 'calc(14px + env(safe-area-inset-bottom))' : 18,
+            borderTop: `1px solid ${LINE}`, background: SURFACE,
+          }}>
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Header({ eyebrow, title, onClose }: { eyebrow: string; title: string; onClose: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '16px 22px 10px' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: INK_FAINT, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          {eyebrow}
+        </div>
+        <h2 style={{
+          fontFamily: SERIF, fontWeight: 400, fontSize: 30, lineHeight: 1.05, color: INK,
+          letterSpacing: '-0.01em', marginTop: 4, overflowWrap: 'anywhere',
+        }}>
+          {title}
+        </h2>
+      </div>
+      <button
+        onClick={onClose}
+        aria-label="Close"
+        style={{
+          width: 40, height: 40, flexShrink: 0, borderRadius: 999, border: 'none',
+          background: 'rgba(26,23,20,0.06)', color: INK_SOFT, fontSize: 22, lineHeight: 1,
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >×</button>
+    </div>
+  )
+}
+
+const label: CSSProperties = {
+  display: 'block', fontSize: 11, fontWeight: 700, color: INK_SOFT,
+  letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 7,
+}
+const field: CSSProperties = {
+  width: '100%', padding: '12px 14px', borderRadius: 12,
+  border: `1.5px solid ${LINE}`, background: '#fff', color: INK,
+  fontFamily: 'inherit', fontSize: 16, outline: 'none',
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+export function ClaimModal({ row, col, cell, onClose, onClaimed, onShare, onAbout }: Props) {
+  const narrow  = useNarrow()
+  const cellNum = cellNumber(row, col, COLS)
+
+  // ── Viewing a claimed cell ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!cell) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [cell, onClose])
+
+  if (cell) {
+    const size = Math.min(narrow ? window.innerWidth - 44 : 360, 360)
+    const href = cell.contact ? linkFor(cell.contact) : null
+    return (
+      <Sheet
+        narrow={narrow} maxWidth={440} onBackdrop={onClose}
+        header={<Header eyebrow={`Cell #${cellNum.toLocaleString()}`} title={cell.ownerName || 'Anonymous'} onClose={onClose} />}
+        footer={
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={() => onShare(row, col)} style={{ ...btnPrimary, flex: 1 }}>Share this cell</button>
+            <button onClick={onClose} style={{ ...btnGhost, flex: '0 0 auto' }}>Close</button>
+          </div>
+        }
+      >
+        <div style={{ fontSize: 13, color: INK_FAINT, marginBottom: 16 }}>
+          Left {new Date(cell.claimedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+          <CellCanvas bgColor={cell.bgColor} imageUrl={cell.imageUrl} contentText={cell.contentText} size={size} />
+        </div>
+        {cell.contentText && cell.contentText.length > 110 && (
+          <p style={{ color: INK, fontSize: 15, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginBottom: 14 }}>
+            {cell.contentText}
+          </p>
+        )}
+        {cell.contact && (
+          <div style={{ fontSize: 14, marginBottom: 6, overflowWrap: 'anywhere' }}>
+            {href
+              ? <a href={href} target="_blank" rel="noopener noreferrer nofollow" style={{ color: ACCENT }}>{cell.contact}</a>
+              : <span style={{ color: INK_SOFT }}>{cell.contact}</span>}
+          </div>
+        )}
+        <button onClick={onAbout} style={{
+          marginTop: 12, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+          fontFamily: 'inherit', fontSize: 12, color: INK_FAINT, textDecoration: 'underline', textUnderlineOffset: 3,
+        }}>
+          What is this place?
+        </button>
+      </Sheet>
+    )
+  }
+
+  return <ClaimFlow {...{ row, col, cellNum, narrow, onClose, onClaimed }} />
+}
+
+// ── Claim flow: compose → lock ───────────────────────────────────────────────
+function ClaimFlow({ row, col, cellNum, narrow, onClose, onClaimed }: {
+  row: number; col: number; cellNum: number; narrow: boolean
+  onClose: () => void; onClaimed: (cell: CellData) => void
+}) {
+  const [step, setStep]               = useState<1 | 2>(1)
+  const [contentText, setContentText] = useState('')
+  const [imageUrl, setImageUrl]       = useState('')
+  const [bgColor, setBgColor]         = useState('#ffffff')
+  const [ownerName, setOwnerName]     = useState('')
+  const [contact, setContact]         = useState('')
+  const [showSign, setShowSign]       = useState(false)
+  const [imgError, setImgError]       = useState('')
+
+  const [token, setToken]           = useState('')
+  const [captchaKey, setCaptchaKey] = useState(0)
+  const [pending, setPending]       = useState(false)
+  const [busy, setBusy]             = useState(false)
+  const [error, setError]           = useState('')
   const [confirmClose, setConfirmClose] = useState(false)
 
-  const cellNum = row * COLS + col + 1
+  const hasContent = !!(contentText.trim() || imageUrl)
+  const dirty = hasContent || !!ownerName || !!contact || bgColor !== '#ffffff'
+  const tryClose = useCallback(() => { if (dirty) setConfirmClose(true); else onClose() }, [dirty, onClose])
 
-  // PaymentIntent creation — disabled in beta (coupon-only mode)
-  // useEffect(() => {
-  //   if (step !== 3 || clientSecret) return
-  //   setPiError('')
-  //   fetch('/api/create-payment-intent', {
-  //     method: 'POST',
-  //     headers: { 'Content-Type': 'application/json' },
-  //     body: JSON.stringify({ row, col, ownerName, contentText, imageUrl, contact, bgColor }),
-  //   })
-  //     .then(r => r.json())
-  //     .then(data => {
-  //       if (data.error) throw new Error(data.error)
-  //       setClientSecret(data.clientSecret)
-  //     })
-  //     .catch(err => {
-  //       setPiError(err.message ?? 'Could not initialise payment. Try again.')
-  //       setStep(2)
-  //     })
-  // }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') tryClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tryClose])
 
-  const handleCouponClaim = async () => {
-    const code = couponInput.trim()
-    if (!code) { setCouponError('Enter a coupon code.'); return }
-    setCouponBusy(true)
-    setCouponError('')
+  const submit = useCallback(async (tok: string) => {
+    setBusy(true)
+    setError('')
+    const abort = new AbortController()
+    const timer = window.setTimeout(() => abort.abort(), 25_000)
     try {
-      const res = await fetch('/api/coupon-claim', {
+      const res = await fetch('/api/claim', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ couponCode: code, row, col, ownerName, contentText, imageUrl, contact, bgColor }),
+        body: JSON.stringify({ captchaToken: tok, row, col, ownerName, contentText, imageUrl, contact, bgColor }),
+        signal: abort.signal,
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Something went wrong.')
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error ?? 'Something went wrong. Try again.')
       onClaimed(rowToCell({
         id: `${row}:${col}`, row_idx: row, col_idx: col,
-        owner_name: ownerName, content_text: contentText,
-        image_url: imageUrl, contact, bg_color: bgColor,
+        owner_name: ownerName.trim(), content_text: contentText.trim(),
+        image_url: imageUrl, contact: contact.trim(), bg_color: bgColor,
         claimed_at: new Date().toISOString(),
       }))
-    } catch (err: unknown) {
-      setCouponError(err instanceof Error ? err.message : 'Something went wrong.')
-      setCouponBusy(false)
+    } catch (err) {
+      setError(abort.signal.aborted
+        ? 'That took too long — your square wasn’t saved. Please try again.'
+        : err instanceof Error ? err.message : 'Something went wrong. Try again.')
+      setToken('')
+      setCaptchaKey(k => k + 1)   // tokens are single-use: fetch a fresh one
+      setBusy(false)
+    } finally {
+      window.clearTimeout(timer)
     }
+  }, [row, col, ownerName, contentText, imageUrl, contact, bgColor, onClaimed])
+
+  // If they hit "Lock it in" before the background check finished, finish it for them
+  useEffect(() => {
+    if (pending && token && !busy) { setPending(false); void submit(token) }
+  }, [pending, token, busy, submit])
+
+  const lock = () => {
+    if (busy || pending) return
+    if (token) void submit(token)
+    else { setError(''); setPending(true) }
   }
 
-  const isDirty = !!(ownerName || contentText || imageUrl || contact || bgColor !== '#ffffff')
-
-  const handleTryClose = () => {
-    if (isDirty) setConfirmClose(true)
-    else onClose()
+  const onFile = async (file?: File) => {
+    if (!file) return
+    setImgError('')
+    try { setImageUrl(await resizeImage(file)) }
+    catch { setImgError('That file couldn’t be read as an image.') }
   }
 
-  const goNext = () => {
-    setStep(s => s + 1)
-  }
-  const goBack = () => setStep(s => s - 1)
-  const handleBackdrop = (e: React.MouseEvent) => { if (e.target === e.currentTarget) handleTryClose() }
+  const preview = narrow ? Math.min(window.innerWidth - 44, step === 1 ? 240 : 300) : (step === 1 ? 250 : 300)
 
-  // Two-column layout when viewport is wide enough
-  const wide = window.innerWidth >= 640
+  const footer = (
+    <>
+      {/* Mounted for the whole flow so the check finishes while they write */}
+      <Turnstile
+        key={captchaKey}
+        onVerify={setToken}
+        onError={msg => { setError(msg); setPending(false) }}
+      />
+      {error && (
+        <div role="alert" style={{
+          background: '#fdecea', color: '#a5321f', borderRadius: 12,
+          padding: '10px 12px', fontSize: 13, lineHeight: 1.45, margin: '4px 0 10px',
+        }}>
+          {error}
+        </div>
+      )}
+      {step === 1 ? (
+        <button
+          onClick={() => setStep(2)}
+          disabled={!hasContent}
+          style={{ ...btnPrimary, width: '100%', opacity: hasContent ? 1 : 0.35, cursor: hasContent ? 'pointer' : 'not-allowed' }}
+        >
+          {hasContent ? 'Preview →' : 'Write something or add a photo'}
+        </button>
+      ) : (
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={() => setStep(1)} disabled={busy} style={{ ...btnGhost, flex: '0 0 auto' }}>Edit</button>
+          <button onClick={lock} disabled={busy} style={{ ...btnPrimary, flex: 1, opacity: busy ? 0.7 : 1 }}>
+            {busy ? 'Locking it in…' : pending ? 'Checking you’re human…' : 'Lock it in forever'}
+          </button>
+        </div>
+      )}
+    </>
+  )
 
   return (
     <>
-    <div onClick={handleBackdrop} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 100, padding: '16px',
-    }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: '20px',
-        width: '100%',
-        maxWidth: cell ? '420px' : step === 1 ? '740px' : '480px',
-        maxHeight: '92dvh', overflowY: 'auto',
-        boxShadow: '0 32px 80px rgba(0,0,0,0.30)',
-        transition: 'max-width 0.3s ease',
-      }}>
-
-        {/* Header */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-          padding: '22px 24px 0',
-        }}>
-          <div>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              Cell #{cellNum.toLocaleString()}
-            </div>
-            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#111827', margin: '2px 0 0' }}>
-              {cell
-                ? 'This cell is taken'
-                : step === 1 ? 'Make it yours'
-                : step === 2 ? 'One last look'
-                : `Lock cell #${cellNum.toLocaleString()}`}
-            </h2>
-          </div>
-          <button onClick={cell ? onClose : handleTryClose} style={{
-            background: '#f3f4f6', border: 'none', borderRadius: '50%',
-            width: '34px', height: '34px', cursor: 'pointer', fontSize: '20px', lineHeight: 1,
-            color: '#6b7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>×</button>
-        </div>
-
-        <div style={{ padding: '18px 24px 24px' }}>
-
-          {/* ── Already claimed ── */}
-          {cell ? (
-            <div>
-              <div style={{ height: '1px', background: '#f3f4f6', margin: '14px 0' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-                <div style={{
-                  width: '38px', height: '38px', borderRadius: '50%',
-                  background: cell.bgColor || '#e2e8f0', border: '2px solid #e2e8f0', flexShrink: 0,
-                }} />
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#111827' }}>{cell.ownerName || 'Anonymous'}</div>
-                  <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-                    {new Date(cell.claimedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
-                  </div>
-                </div>
+      <Sheet
+        narrow={narrow} maxWidth={step === 1 ? 720 : 460} onBackdrop={tryClose}
+        header={
+          <Header
+            eyebrow={`Cell #${cellNum.toLocaleString()} · step ${step} of 2`}
+            title={step === 1 ? 'Make it yours' : 'Lock it in'}
+            onClose={tryClose}
+          />
+        }
+        footer={footer}
+      >
+        {step === 1 ? (
+          <div style={{
+            display: 'flex', flexDirection: narrow ? 'column' : 'row',
+            gap: narrow ? 18 : 28, alignItems: narrow ? 'stretch' : 'flex-start', paddingTop: 6,
+          }}>
+            {/* Preview + colour */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+              <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={preview} />
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center', maxWidth: narrow ? '100%' : preview + 20 }}>
+                {SWATCHES.map(c => (
+                  <button
+                    key={c}
+                    onClick={() => setBgColor(c)}
+                    aria-label={`Background ${c}`}
+                    style={{
+                      width: 30, height: 30, borderRadius: 999, background: c, padding: 0, cursor: 'pointer',
+                      border: bgColor === c ? `2.5px solid ${ACCENT}` : `1.5px solid rgba(26,23,20,0.16)`,
+                      boxShadow: bgColor === c ? `0 0 0 2px ${SURFACE} inset` : 'none',
+                    }}
+                  />
+                ))}
+                <label aria-label="Custom colour" style={{ position: 'relative', width: 30, height: 30, cursor: 'pointer' }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 999,
+                    background: 'conic-gradient(#e2553b, #f2b84b, #6aa38b, #3c7a89, #2f4a7a, #8d5a97, #e2553b)',
+                    border: '1.5px solid rgba(26,23,20,0.16)',
+                  }} />
+                  <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
+                    style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }} />
+                </label>
               </div>
-              {cell.imageUrl && (
-                <img src={cell.imageUrl} alt="" style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', objectFit: 'cover', maxHeight: '200px' }} />
-              )}
-              {cell.contentText && (
-                <p style={{ color: '#374151', lineHeight: 1.6, fontSize: '15px', marginBottom: '10px' }}>{cell.contentText}</p>
-              )}
-              {cell.contact && (
-                <a href={cell.contact.startsWith('http') ? cell.contact : `https://${cell.contact}`}
-                  target="_blank" rel="noopener noreferrer"
-                  style={{ fontSize: '13px', color: '#3b82f6', wordBreak: 'break-all' }}>
-                  {cell.contact}
-                </a>
-              )}
-              {!cell.contentText && !cell.imageUrl && !cell.contact && (
-                <p style={{ color: '#9ca3af', fontStyle: 'italic', fontSize: '14px' }}>No content added.</p>
-              )}
             </div>
 
-          ) : (
-            /* ── Claim flow ── */
-            <>
-              <StepBar step={step} total={3} />
+            {/* Words + photo */}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div>
+                <label style={label} htmlFor="cell-text">Your words</label>
+                <textarea
+                  id="cell-text"
+                  value={contentText}
+                  onChange={e => setContentText(e.target.value)}
+                  placeholder="Something only you would say…"
+                  maxLength={MAX_TEXT}
+                  rows={narrow ? 4 : 6}
+                  autoFocus={!isTouch()}
+                  style={{ ...field, resize: 'vertical', lineHeight: 1.5, minHeight: 110 }}
+                />
+                {contentText.length > MAX_TEXT * 0.8 && (
+                  <div style={{ fontSize: 11, color: INK_FAINT, textAlign: 'right', marginTop: 4 }}>
+                    {contentText.length}/{MAX_TEXT}
+                  </div>
+                )}
+              </div>
 
-              {/* ────────────────────────────────────────────────────────────
-                  Step 1 — Design your cell (two-column on desktop)
-              ──────────────────────────────────────────────────────────── */}
-              {step === 1 && (
-                <div style={{
-                  display: 'flex',
-                  flexDirection: wide ? 'row' : 'column',
-                  gap: wide ? '32px' : '20px',
-                  alignItems: wide ? 'flex-start' : 'stretch',
+              <div>
+                <span style={label}>A photo</span>
+                {imageUrl ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <img src={imageUrl} alt="" style={{ width: 52, height: 52, borderRadius: 10, objectFit: 'cover' }} />
+                    <span style={{ fontSize: 13, color: INK_SOFT, flex: 1 }}>Added — cropped to a square.</span>
+                    <button onClick={() => setImageUrl('')} style={{ ...btnGhost, minHeight: 40, fontSize: 13, padding: '0 14px' }}>
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <label style={{
+                    ...btnGhost, width: '100%', borderRadius: 12, border: `1.5px dashed rgba(26,23,20,0.2)`,
+                    background: 'transparent', fontWeight: 600, fontSize: 14,
+                  }}>
+                    <input type="file" accept="image/*" style={{ display: 'none' }}
+                      onChange={e => { void onFile(e.target.files?.[0]); e.target.value = '' }} />
+                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                      <rect x="2.5" y="4.5" width="15" height="11" rx="2" stroke="currentColor" strokeWidth="1.6" />
+                      <circle cx="7.5" cy="8.5" r="1.5" fill="currentColor" />
+                      <path d="M3 14l4.5-4 3.5 3 2.5-2 3.5 3" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                    </svg>
+                    Add a photo you took or made
+                  </label>
+                )}
+                {imgError && <div style={{ fontSize: 12, color: '#a5321f', marginTop: 6 }}>{imgError}</div>}
+              </div>
+
+              {showSign ? (
+                <div style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={label} htmlFor="cell-name">Signed</label>
+                    <input id="cell-name" value={ownerName} onChange={e => setOwnerName(e.target.value)}
+                      placeholder="Anonymous" maxLength={40} style={field} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={label} htmlFor="cell-link">Link</label>
+                    <input id="cell-link" value={contact} onChange={e => setContact(e.target.value)}
+                      placeholder="site, @handle, email" maxLength={100} style={field}
+                      autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setShowSign(true)} style={{
+                  alignSelf: 'flex-start', background: 'none', border: 'none', padding: '6px 0', cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 14, color: INK_SOFT, textDecoration: 'underline', textUnderlineOffset: 3,
                 }}>
-
-                  {/* Left: live canvas preview */}
-                  <div style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px',
-                    flexShrink: 0,
-                    width: wide ? `${PREVIEW_SIZE}px` : '100%',
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                      <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={PREVIEW_SIZE} />
-                    </div>
-                    <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>
-                      live preview
-                    </div>
-                    {/* Color swatch row for quick picks */}
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '4px' }}>
-                      {['#ffffff', '#111827', '#fef9c3', '#dbeafe', '#dcfce7', '#fce7f3', '#f3f4f6', '#fde68a'].map(c => (
-                        <button key={c} onClick={() => setBgColor(c)} style={{
-                          width: '22px', height: '22px', borderRadius: '6px', background: c,
-                          border: bgColor === c ? '2px solid #3b82f6' : '1.5px solid rgba(0,0,0,0.12)',
-                          cursor: 'pointer', padding: 0,
-                        }} />
-                      ))}
-                      {/* Custom color picker */}
-                      <label style={{ position: 'relative', width: '22px', height: '22px', cursor: 'pointer' }}>
-                        <div style={{
-                          width: '22px', height: '22px', borderRadius: '6px',
-                          background: 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)',
-                          border: '1.5px solid rgba(0,0,0,0.12)',
-                        }} />
-                        <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
-                          style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }} />
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Right: form */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '13px', minWidth: 0 }}>
-                    <div>
-                      <label style={lbl}>
-                        Your name{' '}
-                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
-                      </label>
-                      <input
-                        value={ownerName}
-                        onChange={e => setOwnerName(e.target.value)}
-                        placeholder="Anonymous"
-                        maxLength={40} autoFocus
-                        style={inp}
-                      />
-                    </div>
-
-                    <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '-6px' }}>
-                      Leave it blank to post anonymously.
-                    </div>
-
-                    <div>
-                      <label style={lbl}>
-                        Message{' '}
-                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
-                      </label>
-                      <textarea
-                        value={contentText}
-                        onChange={e => setContentText(e.target.value)}
-                        placeholder="Leave something for the world…"
-                        maxLength={3000} rows={6}
-                        style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }}
-                      />
-                      <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '3px', textAlign: 'right' }}>
-                        {contentText.length}/3000
-                      </div>
-                    </div>
-
-                    <div>
-                      <label style={lbl}>
-                        Background image{' '}
-                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
-                      </label>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        {/* File upload button */}
-                        <label style={{
-                          display: 'flex', alignItems: 'center', gap: '5px',
-                          padding: '0 12px', height: '38px', borderRadius: '8px',
-                          border: '1.5px solid #e2e8f0', background: '#fafafa',
-                          cursor: 'pointer', fontSize: '13px', color: '#374151',
-                          flexShrink: 0, whiteSpace: 'nowrap', boxSizing: 'border-box',
-                        }}>
-                          <input
-                            type="file" accept="image/*" style={{ display: 'none' }}
-                            onChange={async e => {
-                              const file = e.target.files?.[0]
-                              if (!file) return
-                              try { setImageUrl(await resizeImage(file)) } catch { /* ignore */ }
-                              e.target.value = ''  // reset so same file can be re-selected
-                            }}
-                          />
-                          ↑ Upload
-                        </label>
-                        {/* URL paste fallback — hidden when a data URL is loaded */}
-                        {!imageUrl.startsWith('data:') && (
-                          <input
-                            value={imageUrl}
-                            onChange={e => setImageUrl(e.target.value)}
-                            placeholder="or paste a URL…"
-                            style={{ ...inp, flex: 1 }}
-                          />
-                        )}
-                        {/* Thumbnail + remove when image is loaded */}
-                        {imageUrl && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flex: 1, minWidth: 0 }}>
-                            <img
-                              src={imageUrl} alt=""
-                              style={{ width: '36px', height: '36px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #e2e8f0', flexShrink: 0 }}
-                              onError={() => setImageUrl('')}
-                            />
-                            <span style={{ fontSize: '11px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                              {imageUrl.startsWith('data:') ? 'Image uploaded ✓' : imageUrl}
-                            </span>
-                            <button
-                              onClick={() => setImageUrl('')}
-                              style={{ fontSize: '13px', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
-                            >×</button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label style={lbl}>
-                        Your link{' '}
-                        <span style={{ fontWeight: 400, color: '#9ca3af', textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
-                      </label>
-                      <input
-                        value={contact}
-                        onChange={e => setContact(e.target.value)}
-                        placeholder="website, @handle, email…"
-                        maxLength={100} style={inp}
-                      />
-                    </div>
-
-                    <button onClick={goNext} style={{ ...btnPrimary, marginTop: '6px' }}>
-                      Preview my cell →
-                    </button>
-                  </div>
-                </div>
+                  + Sign it (optional)
+                </button>
               )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, paddingTop: 6 }}>
+            <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={preview} />
+            <div style={{ fontSize: 13, color: INK_SOFT }}>
+              Signed <strong style={{ color: INK }}>{ownerName.trim() || 'Anonymous'}</strong>
+              {contact.trim() && <> · {contact.trim()}</>}
+            </div>
+            <div style={{
+              width: '100%', background: 'rgba(226,85,59,0.07)', border: '1px solid rgba(226,85,59,0.22)',
+              borderRadius: 14, padding: '14px 16px', fontSize: 14, lineHeight: 1.55, color: INK,
+            }}>
+              <strong>This is permanent.</strong> Once it’s locked, no one can edit it — including you.
+              Keep it human: made by you, not generated.
+              <div style={{ fontSize: 12, color: INK_FAINT, marginTop: 6 }}>
+                We only remove content that’s illegal or abusive.
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: INK_FAINT, textAlign: 'center' }}>
+              Free. No account. A quiet human check runs in the background.
+            </div>
+          </div>
+        )}
+      </Sheet>
 
-              {/* ────────────────────────────────────────────────────────────
-                  Step 2 — Preview + confirm
-              ──────────────────────────────────────────────────────────── */}
-              {step === 2 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                  {/* Big preview */}
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <CellCanvas bgColor={bgColor} imageUrl={imageUrl} contentText={contentText} size={300} />
-                      <div style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>
-                        exactly what it will look like, forever
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Summary */}
-                  <div style={{ background: '#f9fafb', borderRadius: '12px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                    <div style={{ fontSize: '12px', color: '#374151' }}><strong>Name:</strong> {ownerName || 'Anonymous'}</div>
-                    {contentText && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Message:</strong> {contentText}</div>}
-                    {contact && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Link:</strong> {contact}</div>}
-                    {imageUrl && <div style={{ fontSize: '12px', color: '#374151' }}><strong>Image:</strong> ✓</div>}
-                  </div>
-
-                  {/* Permanence warning */}
-                  <div style={{
-                    background: '#fffbeb', border: '1px solid #fbbf24',
-                    borderRadius: '12px', padding: '14px 16px',
-                    fontSize: '13px', color: '#92400e', lineHeight: 1.55,
-                  }}>
-                    ⚠️ <strong>This is permanent.</strong> Once locked, this cell cannot be edited or removed — not even by us.
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <button onClick={goBack} style={btnSecondary}>← Edit</button>
-                    <button onClick={goNext} style={{
-                      ...btnPrimary, flex: 1,
-                      background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                    }}>
-                      Enter beta code →
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* ────────────────────────────────────────────────────────────
-                  Step 3 — Beta code
-              ──────────────────────────────────────────────────────────── */}
-              {step === 3 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {/* Beta info box */}
-                  <div style={{
-                    background: '#f0fdf4', border: '1px solid #86efac',
-                    borderRadius: '12px', padding: '14px 16px',
-                    fontSize: '13px', color: '#166534', lineHeight: 1.6,
-                  }}>
-                    <strong>The Grid is currently in beta</strong> — the first 1,000 cells are free. After that, cells will be $1 each. Enter the beta code below to lock yours.
-                  </div>
-
-                  {/* Coupon input */}
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <input
-                      value={couponInput}
-                      onChange={e => { setCouponInput(e.target.value); setCouponError('') }}
-                      onKeyDown={e => e.key === 'Enter' && handleCouponClaim()}
-                      placeholder="Beta code"
-                      disabled={couponBusy}
-                      autoFocus
-                      style={{ ...inp, flex: 1 }}
-                    />
-                    <button
-                      onClick={handleCouponClaim}
-                      disabled={couponBusy || !couponInput.trim()}
-                      style={{
-                        ...btnPrimary, width: 'auto', padding: '9px 16px',
-                        background: couponBusy ? '#9ca3af' : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        cursor: couponBusy ? 'not-allowed' : 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {couponBusy ? '…' : 'Lock my cell →'}
-                    </button>
-                  </div>
-                  {couponError && (
-                    <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#dc2626' }}>
-                      {couponError}
-                    </div>
-                  )}
-
-                  <button onClick={goBack} style={btnSecondary}>← Back</button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-
-    {/* ── Discard confirmation ── */}
-
-    {confirmClose && (
-      <div style={{
-        position: 'fixed', inset: 0, zIndex: 110,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.5)', padding: '16px',
-      }}>
+      {confirmClose && (
         <div style={{
-          background: '#fff', borderRadius: '16px', padding: '24px',
-          maxWidth: '320px', width: '100%',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.25)',
+          position: 'fixed', inset: 0, zIndex: 120, background: 'rgba(20,16,12,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          animation: 'fade-in .15s ease both',
         }}>
-          <div style={{ fontSize: '16px', fontWeight: 800, color: '#111827', marginBottom: '6px' }}>
-            Discard changes?
-          </div>
-          <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '20px', lineHeight: 1.5 }}>
-            You'll lose everything you've entered so far.
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={() => setConfirmClose(false)} style={{ ...btnSecondary, flex: 1 }}>
-              Keep editing
-            </button>
-            <button
-              onClick={onClose}
-              style={{ ...btnPrimary, flex: 1, background: '#ef4444' }}
-            >
-              Discard
-            </button>
+          <div style={{
+            background: SURFACE, borderRadius: 20, padding: 22, width: '100%', maxWidth: 330,
+            boxShadow: '0 20px 60px rgba(20,16,12,0.3)', animation: 'pop-in .2s ease both',
+          }}>
+            <div style={{ fontFamily: SERIF, fontSize: 26, color: INK, marginBottom: 6 }}>Discard this?</div>
+            <div style={{ fontSize: 14, color: INK_SOFT, marginBottom: 18, lineHeight: 1.5 }}>
+              What you’ve written won’t be saved.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirmClose(false)} style={{ ...btnGhost, flex: 1 }}>Keep going</button>
+              <button onClick={onClose} style={{ ...btnPrimary, flex: 1, background: '#a5321f' }}>Discard</button>
+            </div>
           </div>
         </div>
-      </div>
-    )}
+      )}
     </>
   )
 }

@@ -1,6 +1,6 @@
 /**
  * Single source of truth for how a cell looks.
- * Used by both the grid canvas and the modal preview canvas.
+ * Used by the grid (rendered once into cached bitmaps) and the modal previews.
  * Everything is in screen-space pixels — no zoom transforms.
  */
 
@@ -19,8 +19,35 @@ export interface DrawCellOpts {
   imageUrl?: string
   imgCache?: ImgCache
   onImageLoad?: () => void
-  hovered?: boolean
-  claimed?: boolean
+}
+
+/** Relative luminance (0 = black, 1 = white) of a #rgb / #rrggbb colour. */
+export function luminance(hex: string): number {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return 1
+  let h = m[1]
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  const n = parseInt(h, 16)
+  const lin = (v: number) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+}
+
+/** Returns the loaded image, kicking off a load (and calling onLoad) if needed. */
+export function getImage(cache: ImgCache, url: string, onLoad?: () => void): HTMLImageElement | null {
+  const entry = cache.get(url)
+  if (entry && entry !== 'loading' && entry !== 'error') return entry
+  if (!entry) {
+    cache.set(url, 'loading')
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload  = () => { cache.set(url, img); onLoad?.() }
+    img.onerror = () => { cache.set(url, 'error') }
+    img.src = url
+  }
+  return null
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
@@ -45,47 +72,53 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): st
 }
 
 export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
-  const { x, y, size, bgColor, contentText, imageUrl, imgCache, onImageLoad, hovered, claimed } = opts
+  const { x, y, size, bgColor, contentText, imageUrl, imgCache, onImageLoad } = opts
 
   // ── background ──────────────────────────────────────────────────────────────
   ctx.fillStyle = bgColor
   ctx.fillRect(x, y, size, size)
 
-  // ── image ────────────────────────────────────────────────────────────────────
-  if (imageUrl && imgCache) {
-    const entry = imgCache.get(imageUrl)
-    if (!entry) {
-      imgCache.set(imageUrl, 'loading')
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload  = () => { imgCache.set(imageUrl, img); onImageLoad?.() }
-      img.onerror = () => { imgCache.set(imageUrl, 'error') }
-      img.src = imageUrl
-    } else if (entry !== 'loading' && entry !== 'error') {
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(x, y, size, size)
-      ctx.clip()
-      ctx.drawImage(entry, x, y, size, size)
-      ctx.restore()
-    }
+  // ── image (cover-cropped to the square, never stretched) ────────────────────
+  const img = imageUrl && imgCache ? getImage(imgCache, imageUrl, onImageLoad) : null
+  if (img) {
+    const side = Math.min(img.naturalWidth, img.naturalHeight)
+    const sx = (img.naturalWidth  - side) / 2
+    const sy = (img.naturalHeight - side) / 2
+    ctx.drawImage(img, sx, sy, side, side, x, y, size, size)
   }
 
   // ── text (fully in screen-space — scales perfectly with zoom) ────────────────
   if (contentText && size > 4) {
     const pad = size * 0.06
     const S   = size - pad * 2   // usable square in screen px
-
-    const N = contentText.length
+    const N   = contentText.length
 
     // squareFit: makes short text big and prominent (fills the cell nicely)
     const squareFit  = S / Math.sqrt(N * CHAR_W_RATIO * LINE_H_RATIO)
-    // naturalSize: floor that targets ~32 chars/line — prevents text from becoming
-    // an unreadable micro-block for long content; text clips at the bottom instead
+    // naturalSize: floor that targets ~32 chars/line — long text clips at the
+    // bottom (zoom in / open the cell to read it all) instead of becoming dust
     const naturalSize = S / (32 * CHAR_W_RATIO)
-    const fontSize   = Math.min(size * 0.18, Math.max(size * 0.03, squareFit, naturalSize))
+    let fontSize     = Math.min(size * 0.18, Math.max(size * 0.03, squareFit, naturalSize))
+
+    // squareFit assumes perfect packing; word-wrap wastes space. Shrink until the
+    // wrapped text actually fits — but never below the long-text readability floor.
+    const floor = Math.max(size * 0.03, naturalSize)
+    for (let i = 0; i < 12 && fontSize > floor; i++) {
+      ctx.font = `${fontSize}px ${FONT}`
+      if (wrapText(ctx, contentText, S).length * fontSize * LINE_H_RATIO <= S) break
+      fontSize = Math.max(floor, fontSize * 0.9)
+    }
 
     ctx.save()
+
+    // Legibility: text over a photo gets a scrim; otherwise pick ink by background.
+    let ink = luminance(bgColor) < 0.32 ? 'rgba(255,255,255,0.92)' : 'rgba(20,17,14,0.86)'
+    if (img) {
+      ctx.fillStyle = 'rgba(15,12,10,0.42)'
+      ctx.fillRect(x, y, size, size)
+      ink = 'rgba(255,255,255,0.95)'
+    }
+
     ctx.beginPath()
     ctx.rect(x + pad, y + pad, S, S)
     ctx.clip()
@@ -94,15 +127,14 @@ export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
     const lines      = wrapText(ctx, contentText, S)
     const lineHeight = fontSize * LINE_H_RATIO
 
-    // Only scale to prevent horizontal overflow; vertical overflow is fine — the
-    // clip rect handles it, and users can zoom in to read more of the cell
+    // Only scale to prevent horizontal overflow; vertical overflow is clipped
     const maxLineW = Math.max(...lines.map(l => ctx.measureText(l).width))
     const scale    = Math.min(1, S / maxLineW)
     const ffs      = fontSize * scale
     const flh      = lineHeight * scale
 
     ctx.font         = `${ffs}px ${FONT}`
-    ctx.fillStyle    = 'rgba(0,0,0,0.82)'
+    ctx.fillStyle    = ink
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
 
@@ -114,31 +146,12 @@ export function drawCell(ctx: CanvasRenderingContext2D, opts: DrawCellOpts) {
       ? y + size / 2 - totalH / 2 + ffs / 2
       : y + pad + ffs / 2
 
-    lines.forEach((line, i) => {
+    for (let i = 0; i < lines.length; i++) {
       const lineY = startY + i * flh
-      if (lineY - flh > y + size) return  // skip fully off-screen lines
-      ctx.fillText(line, cx, lineY)
-    })
+      if (lineY - flh > y + size) break  // rest is below the cell
+      ctx.fillText(lines[i], cx, lineY)
+    }
 
     ctx.restore()
-  }
-
-  // ── border ───────────────────────────────────────────────────────────────────
-  if (hovered) {
-    ctx.strokeStyle = '#3b82f6'
-    ctx.lineWidth   = 2
-    ctx.strokeRect(x + 1, y + 1, size - 2, size - 2)
-  } else if (size > 1) {
-    ctx.strokeStyle = 'rgba(0,0,0,0.10)'
-    ctx.lineWidth   = 0.5
-    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1)
-  }
-
-  // ── claimed dot ──────────────────────────────────────────────────────────────
-  if (claimed && size > 10) {
-    ctx.fillStyle = '#22c55e'
-    ctx.beginPath()
-    ctx.arc(x + size - 4, y + 4, Math.min(3, size * 0.05), 0, Math.PI * 2)
-    ctx.fill()
   }
 }

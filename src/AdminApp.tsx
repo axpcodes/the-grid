@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase'
 import { rowToCell } from './types'
 import type { CellData } from './types'
-
-const COLS = 100
+import { COLS } from './components/GridCanvas'
 
 // ── Password gate ─────────────────────────────────────────────────────────────
 function PasswordGate({ onAuth }: { onAuth: (pw: string) => void }) {
